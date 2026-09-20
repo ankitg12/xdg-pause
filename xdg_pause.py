@@ -24,7 +24,8 @@ import gi
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
-from gi.repository import Gtk, Gdk, GLib
+gi.require_version("Gio", "2.0")
+from gi.repository import Gtk, Gdk, Gio, GLib
 
 __version__ = "0.2.0"
 
@@ -194,6 +195,10 @@ class XdgPauseOverlay:
         self.apply_css()
         self.create_windows()
 
+        self.gnome_bus = None
+        self.gnome_sub_id = None
+        self.setup_gnome_overview_suppressor()
+
         self.start_time = time.time()
         start_key = f"{self.break_type}_start"
         self.play_sound(self.sounds_cfg.get(start_key, "silence"))
@@ -360,10 +365,66 @@ class XdgPauseOverlay:
 
         return True
 
+    def setup_gnome_overview_suppressor(self):
+        try:
+            self.gnome_bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
+            if self.gnome_bus:
+                self.gnome_sub_id = self.gnome_bus.signal_subscribe(
+                    "org.gnome.Shell",
+                    "org.freedesktop.DBus.Properties",
+                    "PropertiesChanged",
+                    "/org/gnome/Shell",
+                    "org.gnome.Shell",
+                    Gio.DBusSignalFlags.NONE,
+                    self.on_gnome_shell_prop_changed,
+                    None
+                )
+                logger.info("GNOME Shell overview suppressor registered")
+        except Exception as e:
+            logger.debug(f"GNOME Shell overview suppressor not available: {e}")
+
+    def on_gnome_shell_prop_changed(self, connection, sender, path, iface, signal, params, user_data):
+        try:
+            props = params.get_child_value(1)
+            if "OverviewActive" in props.keys():
+                is_open = props["OverviewActive"].get_boolean()
+                if is_open:
+                    logger.info("GNOME Shell Overview opened during break; dismissing...")
+                    self.dismiss_gnome_overview()
+        except Exception as e:
+            logger.debug(f"Error handling GNOME Shell property change: {e}")
+
+    def dismiss_gnome_overview(self):
+        if not self.gnome_bus:
+            return
+        try:
+            self.gnome_bus.call_sync(
+                "org.gnome.Shell",
+                "/org/gnome/Shell",
+                "org.freedesktop.DBus.Properties",
+                "Set",
+                GLib.Variant("(ssv)", ("org.gnome.Shell", "OverviewActive", GLib.Variant("b", False))),
+                None,
+                Gio.DBusCallFlags.NONE,
+                -1,
+                None
+            )
+            for win in self.windows:
+                win.present()
+        except Exception as e:
+            logger.debug(f"Error dismissing GNOME overview: {e}")
+
     def finish_break(self, early=False):
         if hasattr(self, "timer_source_id") and self.timer_source_id:
             GLib.source_remove(self.timer_source_id)
             self.timer_source_id = None
+
+        if self.gnome_bus and self.gnome_sub_id:
+            try:
+                self.gnome_bus.signal_unsubscribe(self.gnome_sub_id)
+            except Exception:
+                pass
+            self.gnome_sub_id = None
 
         end_key = f"{self.break_type}_end"
         self.play_sound(self.sounds_cfg.get(end_key, "silence"))
