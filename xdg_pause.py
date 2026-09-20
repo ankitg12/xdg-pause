@@ -288,7 +288,6 @@ class XdgPauseOverlay:
 
             win.connect("delete-event", lambda w, e: True)
             win.connect("key-press-event", self.on_key_press)
-            win.connect("focus-out-event", self.on_focus_out)
 
             box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
             box.set_valign(Gtk.Align.CENTER)
@@ -324,11 +323,6 @@ class XdgPauseOverlay:
             self.windows.append(win)
             self.labels.append(timer_label)
             self.progress_bars.append(pbar)
-
-    def on_focus_out(self, win, event):
-        logger.debug("Focus out event received, requesting present")
-        GLib.idle_add(win.present)
-        return False
 
     def on_key_press(self, win, event):
         elapsed = time.time() - self.start_time
