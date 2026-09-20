@@ -361,10 +361,7 @@ class XdgPauseOverlay:
         if self.gnome_bus:
             self.check_and_dismiss_gnome_overview()
 
-        # If an external application took focus (e.g. Super+Tab), reclaim it
-        if not any(w.is_active() for w in self.windows):
-            if self.windows:
-                self.windows[0].present()
+        # Overview suppression handled via D-Bus signal and poll above
 
         if remaining <= 0:
             logger.info(f"Break completed after {elapsed:.1f}s")
