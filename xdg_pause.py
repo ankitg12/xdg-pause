@@ -3,12 +3,13 @@
 xdg-pause — Minimalist, native multi-monitor break overlay for Linux (Wayland / X11).
 
 Features:
-- Native GTK3 fullscreen surface spanning all connected displays without DPMS signal drops.
-- Eliminates the external monitor disconnect trap (windows stay on their original monitors).
+- Native GTK3 fullscreen surfaces spanning all connected displays without DPMS signal drops.
+- Eliminates the external monitor disconnect trap (preserves multi-monitor window layouts).
 - Pitch-black minimal UI with a depleting progress bar and exact countdown.
 - Full keyboard input isolation: consumes keystrokes to prevent background typing.
-- Decoupled LocaleAdapter: configurable translation templates (Hindi, English, etc.) without hardcoded branches.
-- Configurable via ~/.config/xdg-pause/config.json (sounds, durations, styling, locales).
+- Structured file and systemd journal logging (~/.local/state/xdg-pause/xdg-pause.log).
+- Decoupled LocaleAdapter: configurable translation templates without hardcoded language branches.
+- Fully configurable via ~/.config/xdg-pause/config.json.
 """
 
 import sys
@@ -17,16 +18,41 @@ import json
 import time
 import argparse
 import subprocess
+import logging
+import pathlib
 import gi
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 from gi.repository import Gtk, Gdk, GLib
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
+# Paths
 CONFIG_DIR = os.path.expanduser("~/.config/xdg-pause")
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
+STATE_DIR = pathlib.Path.home() / ".local" / "state" / "xdg-pause"
+STATE_DIR.mkdir(parents=True, exist_ok=True)
+LOG_FILE = STATE_DIR / "xdg-pause.log"
+
+# Logger Configuration
+logger = logging.getLogger("xdg-pause")
+logger.setLevel(logging.DEBUG)
+
+if not logger.handlers:
+    _fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S")
+
+    # File handler
+    _fh = logging.FileHandler(LOG_FILE, encoding="utf-8")
+    _fh.setLevel(logging.DEBUG)
+    _fh.setFormatter(_fmt)
+    logger.addHandler(_fh)
+
+    # Console / systemd journal handler
+    _ch = logging.StreamHandler(sys.stderr)
+    _ch.setLevel(logging.INFO)
+    _ch.setFormatter(_fmt)
+    logger.addHandler(_ch)
 
 DEFAULT_CONFIG = {
     "language": "hi",
@@ -68,13 +94,16 @@ DEFAULT_CONFIG = {
 
 
 def load_config():
+    """Load configuration from ~/.config/xdg-pause/config.json with default fallback."""
     if not os.path.exists(CONFIG_PATH):
         try:
             os.makedirs(CONFIG_DIR, exist_ok=True)
             with open(CONFIG_PATH, "w", encoding="utf-8") as f:
                 json.dump(DEFAULT_CONFIG, f, indent=2, ensure_ascii=False)
+            logger.info(f"Created default configuration at {CONFIG_PATH}")
             return DEFAULT_CONFIG
-        except Exception:
+        except Exception as e:
+            logger.warning(f"Failed to create default configuration: {e}")
             return DEFAULT_CONFIG
 
     try:
@@ -87,7 +116,8 @@ def load_config():
                 else:
                     merged[k] = v
             return merged
-    except Exception:
+    except Exception as e:
+        logger.error(f"Failed to read {CONFIG_PATH}, using defaults: {e}")
         return DEFAULT_CONFIG
 
 
@@ -129,54 +159,59 @@ class LocaleAdapter:
 
 
 class XdgPauseOverlay:
+    """Multi-monitor GTK3 break overlay with complete keyboard input swallowing."""
+
     def __init__(self, break_type="mini", override_duration=None, override_strict=None):
         self.cfg = load_config()
         self.break_type = break_type
 
-        # Durations
         dur_cfg = self.cfg.get("durations", {})
-        default_dur = dur_cfg.get("long_seconds", 600) if break_type == "long" else dur_cfg.get("mini_seconds", 30)
-        self.total_duration = override_duration if override_duration is not None else default_dur
-        self.strict_interval = override_strict if override_strict is not None else dur_cfg.get("strict_interval_seconds", 30)
+        if override_duration is not None:
+            self.total_duration = override_duration
+        else:
+            self.total_duration = dur_cfg.get(f"{break_type}_seconds", 30)
 
-        # Locale adapter
+        if override_strict is not None:
+            self.strict_interval = override_strict
+        else:
+            self.strict_interval = dur_cfg.get("strict_interval_seconds", 30)
+
+        self.ui_cfg = self.cfg.get("ui", {})
+        self.sounds_cfg = self.cfg.get("sounds", {})
         lang = self.cfg.get("language", "hi")
-        locales_dict = self.cfg.get("locales", {})
-        self.locale = LocaleAdapter(language=lang, locales_dict=locales_dict)
+        self.locale = LocaleAdapter(language=lang, locales_dict=self.cfg.get("locales", {}))
 
-        self.ui_cfg = self.cfg.get("ui", DEFAULT_CONFIG["ui"])
-        self.sounds_cfg = self.cfg.get("sounds", DEFAULT_CONFIG["sounds"])
-
-        self.start_time = time.time()
         self.windows = []
         self.labels = []
         self.progress_bars = []
         self.resume_buttons = []
 
+        logger.info(
+            f"Initializing break overlay: mode={self.break_type}, "
+            f"duration={self.total_duration}s, strict_interval={self.strict_interval}s, lang={lang}"
+        )
+
         self.apply_css()
         self.create_windows()
 
-        GLib.timeout_add(50, self.update_timer)
-
-        # Start sound
-        start_key = f"{break_type}_start"
+        self.start_time = time.time()
+        start_key = f"{self.break_type}_start"
         self.play_sound(self.sounds_cfg.get(start_key, "silence"))
 
+        self.timer_source_id = GLib.timeout_add(100, self.update_timer)
+
     def play_sound(self, sound_name):
-        if not self.sounds_cfg.get("enabled", False):
+        if not self.sounds_cfg.get("enabled", False) or sound_name == "silence":
             return
-        if not sound_name or sound_name.lower() in ("silence", "none", "off"):
-            return
-        try:
-            subprocess.run(["canberra-gtk-play", "-i", sound_name], check=False, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except Exception:
-            pass
+        if sound_name == "bell":
+            print("\a", end="", flush=True)
 
     def apply_css(self):
         bg = self.ui_cfg.get("bg_color", "#000000")
         bar_col = self.ui_cfg.get("bar_color", "#cecece")
-        border_col = self.ui_cfg.get("bar_border_color", "#707070")
+        bar_border = self.ui_cfg.get("bar_border_color", "#707070")
         text_col = self.ui_cfg.get("text_color", "#ffffff")
+        bar_w = self.ui_cfg.get("bar_width", 560)
         bar_h = self.ui_cfg.get("bar_height", 6)
 
         css = f"""
@@ -184,10 +219,11 @@ class XdgPauseOverlay:
             background-color: {bg};
         }}
         progressbar trough {{
-            background: transparent;
-            border: 1px solid {border_col};
-            border-radius: 3px;
             min-height: {bar_h}px;
+            min-width: {bar_w}px;
+            background-color: {bg};
+            border-radius: 3px;
+            border: 1px solid {bar_border};
             padding: 0;
             margin: 0;
         }}
@@ -195,7 +231,6 @@ class XdgPauseOverlay:
             background-color: {bar_col};
             border-radius: 3px;
             min-height: {bar_h}px;
-            border: none;
             padding: 0;
             margin: 0;
         }}
@@ -238,7 +273,13 @@ class XdgPauseOverlay:
         bar_w = self.ui_cfg.get("bar_width", 560)
         bar_h = self.ui_cfg.get("bar_height", 6)
 
+        logger.info(f"Detected {n_monitors} monitors on display")
+
         for mon_idx in range(n_monitors):
+            mon = display.get_monitor(mon_idx)
+            geom = mon.get_geometry()
+            desc = mon.get_model() or f"Monitor-{mon_idx}"
+
             win = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
             win.get_style_context().add_class("break-window")
             win.set_title("xdg-pause")
@@ -278,18 +319,23 @@ class XdgPauseOverlay:
             win.show_all()
             win.present()
 
+            logger.info(f"Monitor {mon_idx} ({desc} {geom.width}x{geom.height}): Window fullscreened and mapped")
+
             self.windows.append(win)
             self.labels.append(timer_label)
             self.progress_bars.append(pbar)
 
     def on_focus_out(self, win, event):
+        logger.debug("Focus out event received, requesting present")
         GLib.idle_add(win.present)
         return False
 
     def on_key_press(self, win, event):
         elapsed = time.time() - self.start_time
+        logger.debug(f"Key press intercepted: keyval={event.keyval}, elapsed={elapsed:.1f}s")
         if self.break_type == "long" and elapsed >= self.strict_interval:
             if event.keyval in (Gdk.KEY_Escape, Gdk.KEY_Return, Gdk.KEY_space):
+                logger.info("Early break exit triggered by user via keypress")
                 self.finish_break(early=True)
                 return True
         return True
@@ -314,14 +360,22 @@ class XdgPauseOverlay:
                 btn.set_sensitive(True)
 
         if remaining <= 0:
+            logger.info(f"Break completed after {elapsed:.1f}s")
             self.finish_break(early=False)
             return False
 
         return True
 
     def finish_break(self, early=False):
+        if hasattr(self, "timer_source_id") and self.timer_source_id:
+            GLib.source_remove(self.timer_source_id)
+            self.timer_source_id = None
+
         end_key = f"{self.break_type}_end"
         self.play_sound(self.sounds_cfg.get(end_key, "silence"))
+
+        status = "early user resume" if early else "completed countdown"
+        logger.info(f"Destroying overlay windows ({status})")
 
         for win in self.windows:
             win.destroy()
@@ -355,7 +409,7 @@ def main():
         if override_strict is None:
             override_strict = min(30, override_dur)
     else:
-        print(f"Unknown mode: {args.mode}. Use 'mini', 'long', or duration in seconds.", file=sys.stderr)
+        logger.error(f"Unknown mode: {args.mode}")
         sys.exit(1)
 
     Gtk.init_check()
