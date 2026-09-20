@@ -20,6 +20,8 @@ import argparse
 import subprocess
 import logging
 import pathlib
+import atexit
+import signal
 import gi
 
 gi.require_version("Gtk", "3.0")
@@ -159,6 +161,18 @@ class LocaleAdapter:
         return self.strings.get("resume_button", "Resume Work (Esc)")
 
 
+SUSPEND_KEYBINDINGS = [
+    "switch-applications",
+    "switch-applications-backward",
+    "switch-windows",
+    "switch-windows-backward",
+    "switch-group",
+    "switch-group-backward",
+    "switch-panels",
+    "switch-panels-backward",
+]
+
+
 class XdgPauseOverlay:
     """Multi-monitor GTK3 break overlay with complete keyboard input swallowing."""
 
@@ -197,7 +211,15 @@ class XdgPauseOverlay:
 
         self.gnome_bus = None
         self.gnome_sub_id = None
+        self.saved_keybindings = {}
+        self.wm_settings = None
+
         self.setup_gnome_overview_suppressor()
+        self.suspend_gnome_switchers()
+
+        atexit.register(self.restore_gnome_switchers)
+        signal.signal(signal.SIGINT, self._handle_signal)
+        signal.signal(signal.SIGTERM, self._handle_signal)
 
         self.start_time = time.time()
         start_key = f"{self.break_type}_start"
@@ -446,6 +468,31 @@ class XdgPauseOverlay:
         except Exception as e:
             logger.debug(f"Error dismissing GNOME overview: {e}")
 
+    def suspend_gnome_switchers(self):
+        try:
+            self.wm_settings = Gio.Settings.new("org.gnome.desktop.wm.keybindings")
+            for key in SUSPEND_KEYBINDINGS:
+                self.saved_keybindings[key] = self.wm_settings.get_strv(key)
+                self.wm_settings.set_strv(key, [])
+            logger.info("GNOME Shell switcher keybindings suspended for break")
+        except Exception as e:
+            logger.debug(f"Could not suspend GNOME switcher keybindings: {e}")
+
+    def restore_gnome_switchers(self):
+        if hasattr(self, "wm_settings") and self.wm_settings and self.saved_keybindings:
+            for key, val in self.saved_keybindings.items():
+                try:
+                    self.wm_settings.set_strv(key, val)
+                except Exception:
+                    pass
+            self.saved_keybindings = {}
+            logger.info("GNOME Shell switcher keybindings restored")
+
+    def _handle_signal(self, signum, frame):
+        logger.info(f"Received termination signal ({signum}), restoring keybindings and exiting")
+        self.restore_gnome_switchers()
+        sys.exit(0)
+
     def finish_break(self, early=False):
         if hasattr(self, "timer_source_id") and self.timer_source_id:
             GLib.source_remove(self.timer_source_id)
@@ -457,6 +504,8 @@ class XdgPauseOverlay:
             except Exception:
                 pass
             self.gnome_sub_id = None
+
+        self.restore_gnome_switchers()
 
         end_key = f"{self.break_type}_end"
         self.play_sound(self.sounds_cfg.get(end_key, "silence"))
