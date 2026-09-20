@@ -358,6 +358,9 @@ class XdgPauseOverlay:
                     btn.show()
                 btn.set_sensitive(True)
 
+        if self.gnome_bus:
+            self.check_and_dismiss_gnome_overview()
+
         if remaining <= 0:
             logger.info(f"Break completed after {elapsed:.1f}s")
             self.finish_break(early=False)
@@ -370,7 +373,7 @@ class XdgPauseOverlay:
             self.gnome_bus = Gio.bus_get_sync(Gio.BusType.SESSION, None)
             if self.gnome_bus:
                 self.gnome_sub_id = self.gnome_bus.signal_subscribe(
-                    "org.gnome.Shell",
+                    None,
                     "org.freedesktop.DBus.Properties",
                     "PropertiesChanged",
                     "/org/gnome/Shell",
@@ -387,12 +390,35 @@ class XdgPauseOverlay:
         try:
             props = params.get_child_value(1)
             if "OverviewActive" in props.keys():
-                is_open = props["OverviewActive"].get_boolean()
+                val = props["OverviewActive"]
+                is_open = bool(val.get_boolean() if hasattr(val, "get_boolean") else val)
                 if is_open:
                     logger.info("GNOME Shell Overview opened during break; dismissing...")
                     self.dismiss_gnome_overview()
         except Exception as e:
             logger.debug(f"Error handling GNOME Shell property change: {e}")
+
+    def check_and_dismiss_gnome_overview(self):
+        if not self.gnome_bus:
+            return
+        try:
+            res = self.gnome_bus.call_sync(
+                "org.gnome.Shell",
+                "/org/gnome/Shell",
+                "org.freedesktop.DBus.Properties",
+                "Get",
+                GLib.Variant("(ss)", ("org.gnome.Shell", "OverviewActive")),
+                GLib.VariantType("(v)"),
+                Gio.DBusCallFlags.NONE,
+                200,
+                None
+            )
+            is_open = res.get_child_value(0).get_variant().get_boolean()
+            if is_open:
+                logger.info("GNOME Shell Overview detected active in poll; dismissing...")
+                self.dismiss_gnome_overview()
+        except Exception as e:
+            pass
 
     def dismiss_gnome_overview(self):
         if not self.gnome_bus:
@@ -406,7 +432,7 @@ class XdgPauseOverlay:
                 GLib.Variant("(ssv)", ("org.gnome.Shell", "OverviewActive", GLib.Variant("b", False))),
                 None,
                 Gio.DBusCallFlags.NONE,
-                -1,
+                200,
                 None
             )
             for win in self.windows:
