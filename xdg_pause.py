@@ -415,7 +415,11 @@ class XdgPauseOverlay:
             )
             is_open = res.get_child_value(0).get_variant().get_boolean()
             if is_open:
-                logger.info("GNOME Shell Overview detected active in poll; dismissing...")
+                now = time.time()
+                # Debounce logging to once every 0.5s during animation
+                if not hasattr(self, "_last_overview_log") or now - self._last_overview_log > 0.5:
+                    logger.info("GNOME Shell Overview detected active; dismissing...")
+                    self._last_overview_log = now
                 self.dismiss_gnome_overview()
         except Exception as e:
             pass
