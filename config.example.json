@@ -18,7 +18,10 @@
     "bar_color": "#cecece",
     "bar_border_color": "#707070",
     "bg_color": "#000000",
-    "text_color": "#ffffff"
+    "text_color": "#ffffff",
+    "clock_color": "#888888",
+    "clock_format": "%H:%M  •  %a, %d %b",
+    "clock_position": "bottom-right"
   },
   "locales": {
     "hi": {

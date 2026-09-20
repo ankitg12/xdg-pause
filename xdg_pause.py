@@ -87,8 +87,9 @@ DEFAULT_CONFIG = {
         "bar_border_color": "#707070",
         "bg_color": "#000000",
         "text_color": "#ffffff",
-        "clock_color": "#777777",
-        "clock_format": "%a, %d %b %Y | %H:%M"
+        "clock_color": "#888888",
+        "clock_format": "%H:%M  •  %a, %d %b",
+        "clock_position": "bottom-right"
     },
     "locales": {
         "hi": {
@@ -212,7 +213,8 @@ class XdgPauseOverlay:
         self.progress_bars = []
         self.resume_buttons = []
         self.clock_labels = []
-        self.clock_format = self.ui_cfg.get("clock_format", "%a, %d %b %Y | %H:%M")
+        self.clock_format = self.ui_cfg.get("clock_format", "%H:%M  •  %a, %d %b")
+        self.clock_position = self.ui_cfg.get("clock_position", "bottom-right").lower()
 
         logger.info(
             f"Initializing break overlay: mode={self.break_type}, "
@@ -284,10 +286,11 @@ class XdgPauseOverlay:
         }}
         label.clock-text {{
             color: {clock_col};
-            font-family: 'Noto Sans Devanagari Light', 'Noto Sans Devanagari', 'Noto Sans Light', 'Noto Sans', sans-serif;
-            font-size: 14px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans', sans-serif;
+            font-size: 13px;
             font-weight: 300;
-            letter-spacing: 0.5px;
+            letter-spacing: 0.8px;
+            opacity: 0.8;
         }}
         button.resume-btn {{
             background: transparent;
@@ -365,12 +368,23 @@ class XdgPauseOverlay:
             overlay = Gtk.Overlay()
             overlay.add(box)
 
-            # Top-right clock with date
+            # Configurable clock alignment (bottom-right / top-right / etc.)
+            valign = Gtk.Align.END if "bottom" in self.clock_position else Gtk.Align.START
+            halign = Gtk.Align.START if "left" in self.clock_position else Gtk.Align.END
+
             clock_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-            clock_box.set_valign(Gtk.Align.START)
-            clock_box.set_halign(Gtk.Align.END)
-            clock_box.set_margin_top(28)
-            clock_box.set_margin_end(36)
+            clock_box.set_valign(valign)
+            clock_box.set_halign(halign)
+
+            if valign == Gtk.Align.END:
+                clock_box.set_margin_bottom(28)
+            else:
+                clock_box.set_margin_top(28)
+
+            if halign == Gtk.Align.START:
+                clock_box.set_margin_start(36)
+            else:
+                clock_box.set_margin_end(36)
 
             now_str = datetime.datetime.now().strftime(self.clock_format)
             clock_label = Gtk.Label(label=now_str)
