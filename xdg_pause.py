@@ -22,6 +22,14 @@ import logging
 import pathlib
 import atexit
 import signal
+
+# Strip legacy Ubuntu Unity appmenu-gtk-module from GTK_MODULES before GTK loads.
+# appmenu-gtk-module attaches to window realization and asserts on Wayland surfaces without menus.
+if "GTK_MODULES" in os.environ:
+    os.environ["GTK_MODULES"] = ":".join(
+        [m for m in os.environ["GTK_MODULES"].split(":") if "appmenu" not in m]
+    )
+
 import gi
 
 gi.require_version("Gtk", "3.0")
@@ -30,14 +38,6 @@ gi.require_version("Gio", "2.0")
 from gi.repository import Gtk, Gdk, Gio, GLib
 
 __version__ = "0.2.0"
-
-# Filter upstream GTK3 Wayland unmapped window D-Bus property assertion
-def _filter_gdk_log(log_domain, log_level, message, user_data):
-    if "gdk_wayland_window_set_dbus_properties_libgtk_only" in message:
-        return
-    GLib.log_default_handler(log_domain, log_level, message, user_data)
-
-GLib.log_set_handler("Gdk", GLib.LogLevelFlags.LEVEL_CRITICAL, _filter_gdk_log, None)
 
 # Paths
 CONFIG_DIR = os.path.expanduser("~/.config/xdg-pause")

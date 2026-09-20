@@ -2,6 +2,11 @@ import unittest
 import sys
 import os
 
+if "GTK_MODULES" in os.environ:
+    os.environ["GTK_MODULES"] = ":".join(
+        [m for m in os.environ["GTK_MODULES"].split(":") if "appmenu" not in m]
+    )
+
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import gi
 gi.require_version('Gtk', '3.0')
