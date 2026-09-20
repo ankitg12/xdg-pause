@@ -16,6 +16,7 @@ import sys
 import os
 import json
 import time
+import datetime
 import argparse
 import subprocess
 import logging
@@ -85,7 +86,9 @@ DEFAULT_CONFIG = {
         "bar_color": "#cecece",
         "bar_border_color": "#707070",
         "bg_color": "#000000",
-        "text_color": "#ffffff"
+        "text_color": "#ffffff",
+        "clock_color": "#777777",
+        "clock_format": "%a, %d %b %Y | %H:%M"
     },
     "locales": {
         "hi": {
@@ -208,6 +211,8 @@ class XdgPauseOverlay:
         self.labels = []
         self.progress_bars = []
         self.resume_buttons = []
+        self.clock_labels = []
+        self.clock_format = self.ui_cfg.get("clock_format", "%a, %d %b %Y | %H:%M")
 
         logger.info(
             f"Initializing break overlay: mode={self.break_type}, "
@@ -246,6 +251,7 @@ class XdgPauseOverlay:
         bar_col = self.ui_cfg.get("bar_color", "#cecece")
         bar_border = self.ui_cfg.get("bar_border_color", "#707070")
         text_col = self.ui_cfg.get("text_color", "#ffffff")
+        clock_col = self.ui_cfg.get("clock_color", "#777777")
         bar_w = self.ui_cfg.get("bar_width", 560)
         bar_h = self.ui_cfg.get("bar_height", 6)
 
@@ -275,6 +281,13 @@ class XdgPauseOverlay:
             font-size: 16px;
             font-weight: 300;
             margin-top: 20px;
+        }}
+        label.clock-text {{
+            color: {clock_col};
+            font-family: 'Noto Sans Devanagari Light', 'Noto Sans Devanagari', 'Noto Sans Light', 'Noto Sans', sans-serif;
+            font-size: 14px;
+            font-weight: 300;
+            letter-spacing: 0.5px;
         }}
         button.resume-btn {{
             background: transparent;
@@ -349,7 +362,23 @@ class XdgPauseOverlay:
                 box.pack_start(btn, False, False, 0)
                 self.resume_buttons.append(btn)
 
-            win.add(box)
+            overlay = Gtk.Overlay()
+            overlay.add(box)
+
+            # Top-right clock with date
+            clock_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
+            clock_box.set_valign(Gtk.Align.START)
+            clock_box.set_halign(Gtk.Align.END)
+            clock_box.set_margin_top(28)
+            clock_box.set_margin_end(36)
+
+            now_str = datetime.datetime.now().strftime(self.clock_format)
+            clock_label = Gtk.Label(label=now_str)
+            clock_label.get_style_context().add_class("clock-text")
+            clock_box.pack_start(clock_label, False, False, 0)
+            overlay.add_overlay(clock_box)
+
+            win.add(overlay)
             win.show_all()
             win.present()
 
@@ -358,6 +387,7 @@ class XdgPauseOverlay:
             self.windows.append(win)
             self.labels.append(timer_label)
             self.progress_bars.append(pbar)
+            self.clock_labels.append(clock_label)
 
     def on_key_press(self, win, event):
         elapsed = time.time() - self.start_time
@@ -381,6 +411,10 @@ class XdgPauseOverlay:
 
         for pb in self.progress_bars:
             pb.set_fraction(fraction)
+
+        now_str = datetime.datetime.now().strftime(self.clock_format)
+        for clk in self.clock_labels:
+            clk.set_text(now_str)
 
         if self.break_type == "long" and elapsed >= self.strict_interval:
             for btn in self.resume_buttons:

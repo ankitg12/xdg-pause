@@ -32,10 +32,11 @@ class TestOverlaySmoke(unittest.TestCase):
             override_strict=1
         )
 
-        # Confirm one window, label, and progress bar per monitor
+        # Confirm one window, label, progress bar, and clock label per monitor
         self.assertEqual(len(overlay.windows), n_monitors)
         self.assertEqual(len(overlay.labels), n_monitors)
         self.assertEqual(len(overlay.progress_bars), n_monitors)
+        self.assertEqual(len(overlay.clock_labels), n_monitors)
 
         # Confirm all windows are realized and visible
         for win in overlay.windows:
