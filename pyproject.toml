@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xdg-pause"
+version = "0.1.0"
+description = "Minimalist, native multi-monitor break overlay for Linux (Wayland / X11)"
+readme = "README.md"
+authors = [
+    { name = "Ankit Gaur" },
+    { name = "Gemini 3.8 Flash" }
+]
+license = { text = "MIT" }
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: POSIX :: Linux",
+    "Topic :: Desktop Environment",
+    "Topic :: Utilities"
+]
+requires-python = ">=3.8"
+dependencies = [
+    "PyGObject"
+]
+
+[project.urls]
+Homepage = "https://github.com/ankitg12/xdg-pause"
+Repository = "https://github.com/ankitg12/xdg-pause"
+Issues = "https://github.com/ankitg12/xdg-pause/issues"
+
+[project.scripts]
+xdg-pause = "xdg_pause:main"
+
+[tool.setuptools]
+py-modules = ["xdg_pause"]

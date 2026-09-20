@@ -1,0 +1,10 @@
+[Unit]
+Description=xdg-pause Break Trigger
+After=graphical-session.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/xdg-pause
+TimeoutSec=900
+StandardOutput=journal
+StandardError=journal

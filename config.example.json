@@ -1,0 +1,37 @@
+{
+  "language": "hi",
+  "sounds": {
+    "enabled": false,
+    "mini_start": "silence",
+    "mini_end": "silence",
+    "long_start": "silence",
+    "long_end": "silence"
+  },
+  "durations": {
+    "mini_seconds": 30,
+    "long_seconds": 600,
+    "strict_interval_seconds": 30
+  },
+  "ui": {
+    "bar_width": 560,
+    "bar_height": 6,
+    "bar_color": "#cecece",
+    "bar_border_color": "#707070",
+    "bg_color": "#000000",
+    "text_color": "#ffffff"
+  },
+  "locales": {
+    "hi": {
+      "seconds_remaining": "{s} सेकंड शेष है",
+      "minutes_remaining": "{m} मिनट शेष है",
+      "minutes_seconds_remaining": "{m} मिनट {s} सेकंड शेष है",
+      "resume_button": "वापस जाएं (Esc)"
+    },
+    "en": {
+      "seconds_remaining": "{s} second{s_plural} remaining",
+      "minutes_remaining": "{m} minute{m_plural} remaining",
+      "minutes_seconds_remaining": "{m}m {s}s remaining",
+      "resume_button": "Resume Work (Esc)"
+    }
+  }
+}
