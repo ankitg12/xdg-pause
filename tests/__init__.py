@@ -1,0 +1,1 @@
+# xdg-pause test suite

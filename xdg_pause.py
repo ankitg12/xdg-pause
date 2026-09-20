@@ -242,7 +242,6 @@ class XdgPauseOverlay:
             win = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
             win.get_style_context().add_class("break-window")
             win.set_title("xdg-pause")
-            win.set_modal(True)
             win.set_keep_above(True)
             win.fullscreen_on_monitor(screen, mon_idx)
 
@@ -283,26 +282,8 @@ class XdgPauseOverlay:
             self.labels.append(timer_label)
             self.progress_bars.append(pbar)
 
-        # Flush GTK queue so windows realize before requesting seat grab
-        while Gtk.events_pending():
-            Gtk.main_iteration()
-
-        self.seat = display.get_default_seat()
-        self.grabbed = False
-        self.reassert_focus()
-
-    def reassert_focus(self):
-        for win in self.windows:
-            win.present()
-            win.set_keep_above(True)
-        if hasattr(self, "seat") and self.seat and self.windows:
-            primary_gdk = self.windows[0].get_window()
-            if primary_gdk:
-                status = self.seat.grab(primary_gdk, Gdk.SeatCapabilities.ALL, True, None, None, None)
-                self.grabbed = (status == Gdk.GrabStatus.SUCCESS)
-
     def on_focus_out(self, win, event):
-        GLib.idle_add(self.reassert_focus)
+        GLib.idle_add(win.present)
         return False
 
     def on_key_press(self, win, event):
@@ -339,16 +320,13 @@ class XdgPauseOverlay:
         return True
 
     def finish_break(self, early=False):
-        if hasattr(self, "seat") and self.seat and getattr(self, "grabbed", False):
-            self.seat.ungrab()
-            self.grabbed = False
-
         end_key = f"{self.break_type}_end"
         self.play_sound(self.sounds_cfg.get(end_key, "silence"))
 
         for win in self.windows:
             win.destroy()
-        Gtk.main_quit()
+        if Gtk.main_level() > 0:
+            Gtk.main_quit()
 
 
 def main():
