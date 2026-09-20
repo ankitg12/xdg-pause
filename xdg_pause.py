@@ -81,13 +81,14 @@ DEFAULT_CONFIG = {
         "strict_interval_seconds": 30
     },
     "ui": {
-        "bar_width": 560,
+        "bar_width": "auto",
         "bar_height": 6,
         "bar_color": "#cecece",
         "bar_border_color": "#707070",
         "bg_color": "#000000",
         "text_color": "#ffffff",
-        "clock_color": "#888888",
+        "clock_color": "#ffffff",
+        "clock_font_size": 28,
         "clock_format": "%H:%M  •  %a, %d %b",
         "clock_position": "bottom-right"
     },
@@ -253,18 +254,23 @@ class XdgPauseOverlay:
         bar_col = self.ui_cfg.get("bar_color", "#cecece")
         bar_border = self.ui_cfg.get("bar_border_color", "#707070")
         text_col = self.ui_cfg.get("text_color", "#ffffff")
-        clock_col = self.ui_cfg.get("clock_color", "#777777")
-        bar_w = self.ui_cfg.get("bar_width", 560)
+        clock_col = self.ui_cfg.get("clock_color", "#ffffff")
+        clock_size = self.ui_cfg.get("clock_font_size", 28)
         bar_h = self.ui_cfg.get("bar_height", 6)
 
         css = f"""
         window.break-window {{
             background-color: {bg};
         }}
+        progressbar {{
+            background: transparent;
+            border: none;
+            padding: 0;
+            margin: 0;
+        }}
         progressbar trough {{
             min-height: {bar_h}px;
-            min-width: {bar_w}px;
-            background-color: {bg};
+            background-color: transparent;
             border-radius: 3px;
             border: 1px solid {bar_border};
             padding: 0;
@@ -274,23 +280,23 @@ class XdgPauseOverlay:
             background-color: {bar_col};
             border-radius: 3px;
             min-height: {bar_h}px;
+            border: none;
             padding: 0;
             margin: 0;
         }}
         label.countdown-text {{
             color: {text_col};
             font-family: 'Noto Sans Devanagari Light', 'Noto Sans Devanagari', 'Noto Sans Light', 'Noto Sans', sans-serif;
-            font-size: 16px;
+            font-size: 15px;
             font-weight: 300;
             margin-top: 20px;
         }}
         label.clock-text {{
             color: {clock_col};
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Noto Sans', sans-serif;
-            font-size: 13px;
+            font-family: 'Noto Sans Light', 'Noto Sans Devanagari Light', 'Noto Sans', -apple-system, sans-serif;
+            font-size: {clock_size}px;
             font-weight: 300;
-            letter-spacing: 0.8px;
-            opacity: 0.8;
+            letter-spacing: 0.5px;
         }}
         button.resume-btn {{
             background: transparent;
@@ -344,9 +350,16 @@ class XdgPauseOverlay:
             box.set_valign(Gtk.Align.CENTER)
             box.set_halign(Gtk.Align.CENTER)
 
+            # Stretchly formula: width = min(50vw, 50vh) = min(width, height) // 2
+            cfg_w = self.ui_cfg.get("bar_width")
+            if not cfg_w or cfg_w == "auto":
+                mon_bar_w = min(geom.width, geom.height) // 2
+            else:
+                mon_bar_w = int(cfg_w)
+
             pbar = Gtk.ProgressBar()
             pbar.set_fraction(1.0)
-            pbar.set_size_request(bar_w, bar_h)
+            pbar.set_size_request(mon_bar_w, bar_h)
 
             initial_text = self.locale.format_remaining(self.total_duration)
             timer_label = Gtk.Label(label=initial_text)
@@ -377,14 +390,14 @@ class XdgPauseOverlay:
             clock_box.set_halign(halign)
 
             if valign == Gtk.Align.END:
-                clock_box.set_margin_bottom(28)
+                clock_box.set_margin_bottom(24)
             else:
-                clock_box.set_margin_top(28)
+                clock_box.set_margin_top(24)
 
             if halign == Gtk.Align.START:
-                clock_box.set_margin_start(36)
+                clock_box.set_margin_start(32)
             else:
-                clock_box.set_margin_end(36)
+                clock_box.set_margin_end(32)
 
             now_str = datetime.datetime.now().strftime(self.clock_format)
             clock_label = Gtk.Label(label=now_str)

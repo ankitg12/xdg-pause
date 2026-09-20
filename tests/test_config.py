@@ -47,7 +47,7 @@ class TestConfig(unittest.TestCase):
                 self.assertEqual(loaded["durations"]["long_seconds"], 600)
                 self.assertEqual(loaded["durations"]["strict_interval_seconds"], 30)
                 self.assertEqual(loaded["ui"]["bar_height"], 10)
-                self.assertEqual(loaded["ui"]["bar_width"], 560)
+                self.assertEqual(loaded["ui"]["bar_width"], "auto")
             finally:
                 xdg_pause.CONFIG_PATH = orig_path
                 xdg_pause.CONFIG_DIR = orig_dir
