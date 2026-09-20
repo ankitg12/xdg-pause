@@ -31,6 +31,14 @@ from gi.repository import Gtk, Gdk, Gio, GLib
 
 __version__ = "0.2.0"
 
+# Filter upstream GTK3 Wayland unmapped window D-Bus property assertion
+def _filter_gdk_log(log_domain, log_level, message, user_data):
+    if "gdk_wayland_window_set_dbus_properties_libgtk_only" in message:
+        return
+    GLib.log_default_handler(log_domain, log_level, message, user_data)
+
+GLib.log_set_handler("Gdk", GLib.LogLevelFlags.LEVEL_CRITICAL, _filter_gdk_log, None)
+
 # Paths
 CONFIG_DIR = os.path.expanduser("~/.config/xdg-pause")
 CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
