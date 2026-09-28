@@ -31,6 +31,10 @@ if "GTK_MODULES" in os.environ:
         [m for m in os.environ["GTK_MODULES"].split(":") if "appmenu" not in m]
     )
 
+# Native GTK3 Wayland ignores fullscreen_on_monitor and keep_above under Mutter, so the
+# overlay lands on the wrong screen and can be covered. Xwayland honours both; no-op on Xorg.
+os.environ.setdefault("GDK_BACKEND", "x11")
+
 import gi
 
 gi.require_version("Gtk", "3.0")
@@ -52,7 +56,9 @@ logger = logging.getLogger("xdg-pause")
 logger.setLevel(logging.DEBUG)
 
 if not logger.handlers:
-    _fmt = logging.Formatter("%(asctime)s [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S")
+    _fmt = logging.Formatter(
+        "%(asctime)s [%(levelname)s] %(message)s", "%Y-%m-%d %H:%M:%S"
+    )
 
     # File handler
     _fh = logging.FileHandler(LOG_FILE, encoding="utf-8")
@@ -73,12 +79,12 @@ DEFAULT_CONFIG = {
         "mini_start": "silence",
         "mini_end": "silence",
         "long_start": "silence",
-        "long_end": "silence"
+        "long_end": "silence",
     },
     "durations": {
         "mini_seconds": 30,
         "long_seconds": 600,
-        "strict_interval_seconds": 30
+        "strict_interval_seconds": 30,
     },
     "ui": {
         "bar_width": "auto",
@@ -90,22 +96,22 @@ DEFAULT_CONFIG = {
         "clock_color": "#ffffff",
         "clock_font_size": 28,
         "clock_format": "%H:%M  •  %a, %d %b",
-        "clock_position": "bottom-right"
+        "clock_position": "bottom-right",
     },
     "locales": {
         "hi": {
             "seconds_remaining": "{s} सेकंड शेष है",
             "minutes_remaining": "{m} मिनट शेष है",
             "minutes_seconds_remaining": "{m} मिनट {s} सेकंड शेष है",
-            "resume_button": "वापस जाएं (Esc)"
+            "resume_button": "वापस जाएं (Esc)",
         },
         "en": {
             "seconds_remaining": "{s} second{s_plural} remaining",
             "minutes_remaining": "{m} minute{m_plural} remaining",
             "minutes_seconds_remaining": "{m}m {s}s remaining",
-            "resume_button": "Resume Work (Esc)"
-        }
-    }
+            "resume_button": "Resume Work (Esc)",
+        },
+    },
 }
 
 
@@ -144,7 +150,7 @@ class LocaleAdapter:
         "seconds_remaining": "{s} seconds remaining",
         "minutes_remaining": "{m} minutes remaining",
         "minutes_seconds_remaining": "{m}m {s}s remaining",
-        "resume_button": "Resume Work (Esc)"
+        "resume_button": "Resume Work (Esc)",
     }
 
     def __init__(self, language="hi", locales_dict=None):
@@ -160,7 +166,7 @@ class LocaleAdapter:
             "m": mins,
             "s": rem_s,
             "m_plural": "s" if mins > 1 else "",
-            "s_plural": "s" if rem_s != 1 else ""
+            "s_plural": "s" if rem_s != 1 else "",
         }
         if mins > 0 and rem_s > 0:
             tmpl = self.strings.get("minutes_seconds_remaining", "{m}m {s}s remaining")
@@ -207,7 +213,9 @@ class XdgPauseOverlay:
         self.ui_cfg = self.cfg.get("ui", {})
         self.sounds_cfg = self.cfg.get("sounds", {})
         lang = self.cfg.get("language", "hi")
-        self.locale = LocaleAdapter(language=lang, locales_dict=self.cfg.get("locales", {}))
+        self.locale = LocaleAdapter(
+            language=lang, locales_dict=self.cfg.get("locales", {})
+        )
 
         self.windows = []
         self.labels = []
@@ -382,7 +390,9 @@ class XdgPauseOverlay:
             overlay.add(box)
 
             # Configurable clock alignment (bottom-right / top-right / etc.)
-            valign = Gtk.Align.END if "bottom" in self.clock_position else Gtk.Align.START
+            valign = (
+                Gtk.Align.END if "bottom" in self.clock_position else Gtk.Align.START
+            )
             halign = Gtk.Align.START if "left" in self.clock_position else Gtk.Align.END
 
             clock_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
@@ -409,7 +419,9 @@ class XdgPauseOverlay:
             win.show_all()
             win.present()
 
-            logger.info(f"Monitor {mon_idx} ({desc} {geom.width}x{geom.height}): Window fullscreened and mapped")
+            logger.info(
+                f"Monitor {mon_idx} ({desc} {geom.width}x{geom.height}): Window fullscreened and mapped"
+            )
 
             self.windows.append(win)
             self.labels.append(timer_label)
@@ -418,7 +430,9 @@ class XdgPauseOverlay:
 
     def on_key_press(self, win, event):
         elapsed = time.time() - self.start_time
-        logger.debug(f"Key press intercepted: keyval={event.keyval}, elapsed={elapsed:.1f}s")
+        logger.debug(
+            f"Key press intercepted: keyval={event.keyval}, elapsed={elapsed:.1f}s"
+        )
         if self.break_type == "long" and elapsed >= self.strict_interval:
             if event.keyval in (Gdk.KEY_Escape, Gdk.KEY_Return, Gdk.KEY_space):
                 logger.info("Early break exit triggered by user via keypress")
@@ -473,20 +487,26 @@ class XdgPauseOverlay:
                     "org.gnome.Shell",
                     Gio.DBusSignalFlags.NONE,
                     self.on_gnome_shell_prop_changed,
-                    None
+                    None,
                 )
                 logger.info("GNOME Shell overview suppressor registered")
         except Exception as e:
             logger.debug(f"GNOME Shell overview suppressor not available: {e}")
 
-    def on_gnome_shell_prop_changed(self, connection, sender, path, iface, signal, params, user_data):
+    def on_gnome_shell_prop_changed(
+        self, connection, sender, path, iface, signal, params, user_data
+    ):
         try:
             props = params.get_child_value(1)
             if "OverviewActive" in props.keys():
                 val = props["OverviewActive"]
-                is_open = bool(val.get_boolean() if hasattr(val, "get_boolean") else val)
+                is_open = bool(
+                    val.get_boolean() if hasattr(val, "get_boolean") else val
+                )
                 if is_open:
-                    logger.info("GNOME Shell Overview opened during break; dismissing...")
+                    logger.info(
+                        "GNOME Shell Overview opened during break; dismissing..."
+                    )
                     self.dismiss_gnome_overview()
         except Exception as e:
             logger.debug(f"Error handling GNOME Shell property change: {e}")
@@ -504,13 +524,16 @@ class XdgPauseOverlay:
                 GLib.VariantType("(v)"),
                 Gio.DBusCallFlags.NONE,
                 200,
-                None
+                None,
             )
             is_open = res.get_child_value(0).get_variant().get_boolean()
             if is_open:
                 now = time.time()
                 # Debounce logging to once every 0.5s during animation
-                if not hasattr(self, "_last_overview_log") or now - self._last_overview_log > 0.5:
+                if (
+                    not hasattr(self, "_last_overview_log")
+                    or now - self._last_overview_log > 0.5
+                ):
                     logger.info("GNOME Shell Overview detected active; dismissing...")
                     self._last_overview_log = now
                 self.dismiss_gnome_overview()
@@ -526,11 +549,14 @@ class XdgPauseOverlay:
                 "/org/gnome/Shell",
                 "org.freedesktop.DBus.Properties",
                 "Set",
-                GLib.Variant("(ssv)", ("org.gnome.Shell", "OverviewActive", GLib.Variant("b", False))),
+                GLib.Variant(
+                    "(ssv)",
+                    ("org.gnome.Shell", "OverviewActive", GLib.Variant("b", False)),
+                ),
                 None,
                 Gio.DBusCallFlags.NONE,
                 200,
-                None
+                None,
             )
             for win in self.windows:
                 win.present()
@@ -558,7 +584,9 @@ class XdgPauseOverlay:
             logger.info("GNOME Shell switcher keybindings restored")
 
     def _handle_signal(self, signum, frame):
-        logger.info(f"Received termination signal ({signum}), restoring keybindings and exiting")
+        logger.info(
+            f"Received termination signal ({signum}), restoring keybindings and exiting"
+        )
         self.restore_gnome_switchers()
         sys.exit(0)
 
@@ -592,11 +620,24 @@ def main():
     parser = argparse.ArgumentParser(
         description="xdg-pause: Minimalist native multi-monitor break overlay for Linux Wayland/X11",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="Examples:\n  xdg-pause              # Mini break using configured duration\n  xdg-pause long         # Long break (600s with 30s strict interval)\n  xdg-pause 45           # Custom 45-second break\n"
+        epilog="Examples:\n  xdg-pause              # Mini break using configured duration\n  xdg-pause long         # Long break (600s with 30s strict interval)\n  xdg-pause 45           # Custom 45-second break\n",
     )
-    parser.add_argument("mode", nargs="?", default="mini", help="Break mode ('mini', 'long', or integer seconds)")
-    parser.add_argument("-v", "--version", action="version", version=f"xdg-pause {__version__}")
-    parser.add_argument("-s", "--strict", type=int, default=None, help="Override strict non-cancellable interval in seconds")
+    parser.add_argument(
+        "mode",
+        nargs="?",
+        default="mini",
+        help="Break mode ('mini', 'long', or integer seconds)",
+    )
+    parser.add_argument(
+        "-v", "--version", action="version", version=f"xdg-pause {__version__}"
+    )
+    parser.add_argument(
+        "-s",
+        "--strict",
+        type=int,
+        default=None,
+        help="Override strict non-cancellable interval in seconds",
+    )
 
     args = parser.parse_args()
 
@@ -618,7 +659,11 @@ def main():
         sys.exit(1)
 
     Gtk.init_check()
-    XdgPauseOverlay(break_type=b_type, override_duration=override_dur, override_strict=override_strict)
+    XdgPauseOverlay(
+        break_type=b_type,
+        override_duration=override_dur,
+        override_strict=override_strict,
+    )
     Gtk.main()
 
 
