@@ -9,7 +9,8 @@ description = "Minimalist, native multi-monitor break overlay for Linux (Wayland
 readme = "README.md"
 authors = [
     { name = "Ankit Gaur" },
-    { name = "Gemini 3.8 Flash" }
+    { name = "Gemini 3.8 Flash" },
+    { name = "Claude Opus 5.5" }
 ]
 license = { text = "MIT" }
 classifiers = [

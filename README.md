@@ -146,10 +146,35 @@ To trigger breaks automatically every 10 minutes (clock-aligned with long breaks
 
 ---
 
+## Integration: Break-Active Marker
+
+The overlay absorbs every key press. This also includes keys that tools such as `ydotool`, dictation software and text expanders synthesise. If such a tool types during a break, the overlay discards the text.
+
+To prevent this, `xdg-pause` writes its PID to `$XDG_RUNTIME_DIR/xdg-pause.active` while the overlay is on screen. It removes the file when the break ends or the process exits. A tool can wait before it types:
+
+```sh
+marker="${XDG_RUNTIME_DIR:-/tmp}/xdg-pause.active"
+while [ -f "$marker" ] && kill -0 "$(cat "$marker")" 2>/dev/null; do sleep 1; done
+```
+
+The PID check makes the loop ignore a stale file left by a killed process. Add a time limit to the loop if a hang is not acceptable.
+
+Example: [Voxtype](https://github.com/peteonrails/voxtype) runs `pre_output_command` and waits for it to finish before it types, so this goes in its config:
+
+```toml
+[output]
+pre_output_command = "/path/to/voxtype-wait-break"   # the loop above
+```
+
+Dictation that ends during a break is then typed into the original window after the break.
+
+---
+
 ## Authors
 
 - **Ankit Gaur** ([@ankitg12](https://github.com/ankitg12))
 - **Gemini 3.8 Flash**
+- **Claude Opus 5.5**
 
 ## License
 
