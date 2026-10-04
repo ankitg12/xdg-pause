@@ -28,6 +28,7 @@ Attempting to enforce breaks by putting displays into power-saving standby via D
   - **Long Breaks (600s)**: Strict for the first 30 seconds; permits voluntary early return (`Esc` or resume button) afterward.
 - **Decoupled Localization (`LocaleAdapter`)**: Translation strings are template-driven in `config.json` (Hindi, English, etc.) without hardcoded conditionals.
 - **Configurable Audio**: Supports silent operation or native XDG sound events (`canberra-gtk-play`).
+- **Break-Active Marker**: Writes its PID to `$XDG_RUNTIME_DIR/xdg-pause.active` while the overlay is up, so tools that synthesise keys (`ydotool`, dictation such as Voxtype's `pre_output_command`) can wait instead of typing into the overlay.
 - **Zero Heavy Overhead**: Pure Python + PyGObject (~250 lines). Eliminates hundreds of megabytes of Electron background memory.
 
 ---
@@ -143,30 +144,6 @@ To trigger breaks automatically every 10 minutes (clock-aligned with long breaks
    systemctl --user daemon-reload
    systemctl --user enable --now xdg-pause.timer
    ```
-
----
-
-## Integration: Break-Active Marker
-
-The overlay absorbs every key press. This also includes keys that tools such as `ydotool`, dictation software and text expanders synthesise. If such a tool types during a break, the overlay discards the text.
-
-To prevent this, `xdg-pause` writes its PID to `$XDG_RUNTIME_DIR/xdg-pause.active` while the overlay is on screen. It removes the file when the break ends or the process exits. A tool can wait before it types:
-
-```sh
-marker="${XDG_RUNTIME_DIR:-/tmp}/xdg-pause.active"
-while [ -f "$marker" ] && kill -0 "$(cat "$marker")" 2>/dev/null; do sleep 1; done
-```
-
-The PID check makes the loop ignore a stale file left by a killed process. Add a time limit to the loop if a hang is not acceptable.
-
-Example: [Voxtype](https://github.com/peteonrails/voxtype) runs `pre_output_command` and waits for it to finish before it types, so this goes in its config:
-
-```toml
-[output]
-pre_output_command = "/path/to/voxtype-wait-break"   # the loop above
-```
-
-Dictation that ends during a break is then typed into the original window after the break.
 
 ---
 
