@@ -35,6 +35,10 @@ if "GTK_MODULES" in os.environ:
 # overlay lands on the wrong screen and can be covered. Xwayland honours both; no-op on Xorg.
 os.environ.setdefault("GDK_BACKEND", "x11")
 
+ACTIVE_MARKER = (
+    pathlib.Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "xdg-pause.active"
+)
+
 import gi
 
 gi.require_version("Gtk", "3.0")
@@ -241,6 +245,15 @@ class XdgPauseOverlay:
         self.setup_gnome_overview_suppressor()
         self.suspend_gnome_switchers()
 
+        # Marker for other tools (e.g. voxtype pre_output_command) to defer keystroke
+        # injection until the overlay is gone. Holds our PID so readers can ignore a
+        # stale file left by a SIGKILL.
+        self.active_marker = ACTIVE_MARKER
+        try:
+            self.active_marker.write_text(str(os.getpid()))
+        except OSError as e:
+            logger.warning(f"Could not write active marker {self.active_marker}: {e}")
+        atexit.register(self.remove_active_marker)
         atexit.register(self.restore_gnome_switchers)
         signal.signal(signal.SIGINT, self._handle_signal)
         signal.signal(signal.SIGTERM, self._handle_signal)
@@ -590,6 +603,13 @@ class XdgPauseOverlay:
         self.restore_gnome_switchers()
         sys.exit(0)
 
+    def remove_active_marker(self):
+        try:
+            if self.active_marker.read_text().strip() == str(os.getpid()):
+                self.active_marker.unlink()
+        except OSError:
+            pass
+
     def finish_break(self, early=False):
         if hasattr(self, "timer_source_id") and self.timer_source_id:
             GLib.source_remove(self.timer_source_id)
@@ -612,6 +632,7 @@ class XdgPauseOverlay:
 
         for win in self.windows:
             win.destroy()
+        self.remove_active_marker()
         if Gtk.main_level() > 0:
             Gtk.main_quit()
 
