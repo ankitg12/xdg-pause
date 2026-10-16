@@ -15,9 +15,22 @@ from gi.repository import Gtk, Gdk, GLib
 import xdg_pause
 
 
+import tempfile
+
+
 class TestOverlaySmoke(unittest.TestCase):
     def setUp(self):
         Gtk.init_check()
+        self._tmpdir = tempfile.TemporaryDirectory()
+        self._old_xdg_config = os.environ.get("XDG_CONFIG_HOME")
+        os.environ["XDG_CONFIG_HOME"] = self._tmpdir.name
+
+    def tearDown(self):
+        if self._old_xdg_config is None:
+            os.environ.pop("XDG_CONFIG_HOME", None)
+        else:
+            os.environ["XDG_CONFIG_HOME"] = self._old_xdg_config
+        self._tmpdir.cleanup()
 
     def test_multi_monitor_window_instantiation(self):
         display = Gdk.Display.get_default()
