@@ -13,6 +13,7 @@ class TestConfig(unittest.TestCase):
         cfg = xdg_pause.DEFAULT_CONFIG
         self.assertIn("sounds", cfg)
         self.assertIn("durations", cfg)
+        self.assertIn("hooks", cfg)
         self.assertIn("ui", cfg)
         self.assertIn("locales", cfg)
         self.assertEqual(cfg["durations"]["mini_seconds"], 30)
@@ -24,12 +25,8 @@ class TestConfig(unittest.TestCase):
             tmp_cfg_path = os.path.join(tmpdir, "config.json")
             user_data = {
                 "language": "en",
-                "durations": {
-                    "mini_seconds": 15
-                },
-                "ui": {
-                    "bar_height": 10
-                }
+                "durations": {"mini_seconds": 15},
+                "ui": {"bar_height": 10},
             }
             with open(tmp_cfg_path, "w", encoding="utf-8") as f:
                 json.dump(user_data, f)

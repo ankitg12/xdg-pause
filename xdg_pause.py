@@ -123,6 +123,13 @@ DEFAULT_CONFIG = {
         "require_early_exit_reason": True,
         "min_reason_chars": 5,
     },
+    "hooks": {
+        "break_start": None,
+        "break_complete": None,
+        "early_exit": None,
+        "snooze_start": None,
+        "snooze_end": None,
+    },
     "ui": {
         "bar_width": "auto",
         "bar_height": 6,
@@ -278,6 +285,7 @@ class XdgPauseOverlay:
 
         self.ui_cfg = self.cfg.get("ui", {})
         self.sounds_cfg = self.cfg.get("sounds", {})
+        self.hooks_cfg = self.cfg.get("hooks", {})
         lang = self.cfg.get("language", "hi")
         self.locale = LocaleAdapter(
             language=lang, locales_dict=self.cfg.get("locales", {})
@@ -325,8 +333,23 @@ class XdgPauseOverlay:
         self.start_time = time.time()
         start_key = f"{self.break_type}_start"
         self.play_sound(self.sounds_cfg.get(start_key, "silence"))
+        self.run_hook("break_start")
 
         self.timer_source_id = GLib.timeout_add(100, self.update_timer)
+
+    def run_hook(self, event_name, reason=None):
+        """Execute optional lifecycle hook from config['hooks'] or ~/.config/xdg-pause/hooks/<event>.d/."""
+        elapsed = int(round(time.time() - getattr(self, "start_time", time.time())))
+        remaining = max(0, int(round(self.total_duration - elapsed)))
+        dispatch_hook(
+            event_name,
+            hooks_cfg=self.hooks_cfg,
+            mode=self.break_type,
+            duration=self.total_duration,
+            elapsed=elapsed,
+            remaining=remaining,
+            reason=reason,
+        )
 
     def play_sound(self, sound_name):
         if not self.sounds_cfg.get("enabled", False) or sound_name == "silence":
@@ -801,11 +824,66 @@ class XdgPauseOverlay:
             status = "completed countdown"
         logger.info(f"Destroying overlay windows ({status})")
 
+        self.run_hook("early_exit" if early else "break_complete", reason=reason)
+
         for win in self.windows:
             win.destroy()
         self.remove_active_marker()
         if Gtk.main_level() > 0:
             Gtk.main_quit()
+
+
+def dispatch_hook(
+    event_name,
+    hooks_cfg=None,
+    mode="",
+    duration=0,
+    elapsed=0,
+    remaining=0,
+    reason=None,
+):
+    """Fire non-blocking hook command from config['hooks'][event_name] and ~/.config/xdg-pause/hooks/<event_name>.d/."""
+    if hooks_cfg is None:
+        hooks_cfg = load_config().get("hooks", {})
+    env = os.environ.copy()
+    env.update(
+        {
+            "XDG_PAUSE_EVENT": str(event_name),
+            "XDG_PAUSE_MODE": str(mode),
+            "XDG_PAUSE_DURATION": str(duration),
+            "XDG_PAUSE_ELAPSED": str(elapsed),
+            "XDG_PAUSE_REMAINING": str(remaining),
+            "XDG_PAUSE_REASON": str(reason or ""),
+        }
+    )
+    cmd = hooks_cfg.get(event_name)
+    if cmd:
+        try:
+            logger.info(f"Running hook '{event_name}': {cmd}")
+            subprocess.Popen(
+                cmd,
+                shell=True,
+                env=env,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
+        except Exception as e:
+            logger.warning(f"Hook '{event_name}' failed to launch: {e}")
+
+    hook_dir = pathlib.Path(CONFIG_DIR) / "hooks" / f"{event_name}.d"
+    if hook_dir.is_dir():
+        for script in sorted(hook_dir.iterdir()):
+            if script.is_file() and os.access(script, os.X_OK):
+                try:
+                    logger.info(f"Running hook script '{event_name}': {script}")
+                    subprocess.Popen(
+                        [str(script)],
+                        env=env,
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
+                except Exception as e:
+                    logger.warning(f"Hook script {script} failed: {e}")
 
 
 SNOOZE_TIMER = os.environ.get("XDG_PAUSE_TIMER", "xdg-fixed-break.timer")
@@ -889,6 +967,7 @@ def handle_snooze(args_list):
             return 2
         _snooze_cancel_resume()
         subprocess.run(["systemctl", "--user", "start", SNOOZE_TIMER], check=True)
+        dispatch_hook("snooze_end", mode="snooze")
         _snooze_status()
         return 0
     elif args_list[0] == "status":
@@ -930,6 +1009,11 @@ def handle_snooze(args_list):
             print(f"Breaks snoozed for {mins} min (until {until}).")
         else:
             print("Breaks snoozed until 'xdg-pause snooze end'.")
+        dispatch_hook(
+            "snooze_start",
+            mode="snooze",
+            duration=int(mins) * 60 if mins else 0,
+        )
         _snooze_status()
     return 0
 

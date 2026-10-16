@@ -75,12 +75,31 @@ class TestOverlaySmoke(unittest.TestCase):
         overlay.cancel_early_exit_prompt()
         self.assertFalse(overlay.prompting_reason)
 
-        # Valid reason (>= 5 chars) finishes break with reason logged
-        overlay.request_early_exit()
-        overlay.reason_entries[0].set_text("production call")
-        overlay.on_reason_activate(overlay.reason_entries[0])
-        while Gtk.events_pending():
-            Gtk.main_iteration()
+        # Valid reason (>= 5 chars) finishes break with reason logged and runs early_exit hook
+        import tempfile
+
+        with tempfile.NamedTemporaryFile(delete=False) as tf:
+            hook_out = tf.name
+        try:
+            overlay.hooks_cfg["early_exit"] = (
+                f'printf "%s|%s|%s" "$XDG_PAUSE_EVENT" "$XDG_PAUSE_MODE" "$XDG_PAUSE_REASON" > {hook_out}'
+            )
+            overlay.request_early_exit()
+            overlay.reason_entries[0].set_text("production call")
+            overlay.on_reason_activate(overlay.reason_entries[0])
+            while Gtk.events_pending():
+                Gtk.main_iteration()
+            import time as _t
+
+            for _ in range(20):
+                if os.path.exists(hook_out) and os.path.getsize(hook_out) > 0:
+                    break
+                _t.sleep(0.05)
+            with open(hook_out, "r", encoding="utf-8") as f:
+                self.assertEqual(f.read(), "early_exit|long|production call")
+        finally:
+            if os.path.exists(hook_out):
+                os.unlink(hook_out)
 
 
 if __name__ == "__main__":

@@ -28,6 +28,8 @@ Attempting to enforce breaks by putting displays into power-saving standby via D
   - **Long Breaks (600s)**: Strict for the first 30 seconds; after that, pressing `Esc` (or clicking the resume button) opens an inline reason prompt (`require_early_exit_reason: true`, `min_reason_chars: 5`) so you cannot reflexively dismiss a 10-minute break by muscle memory. You must type a conscious reason and press `Enter` (logged to `xdg-pause.log`), or press `Esc` again to cancel the prompt and stay in the break.
 - **Built-in Systemd Timer Snooze (`xdg-pause snooze`)**:
   - Pause the recurring break timer for a fixed duration (`xdg-pause snooze 90`) using a transient `systemd-run --user --on-active` timer that automatically resumes breaks when the window expires, or pause indefinitely (`xdg-pause snooze start` / `xdg-pause snooze end`).
+- **Lifecycle Hooks (`break_start`, `break_complete`, `early_exit`, `snooze_start`, `snooze_end`)**:
+  - Configure shell commands in `config.json` under `"hooks"` or drop executables into `~/.config/xdg-pause/hooks/<event>.d/`. Each hook receives `XDG_PAUSE_EVENT`, `XDG_PAUSE_MODE`, `XDG_PAUSE_DURATION`, `XDG_PAUSE_ELAPSED`, `XDG_PAUSE_REMAINING`, and `XDG_PAUSE_REASON` in its environment (e.g., to trigger a prompt on `break_start` or append early-exit reasons to a daily journal on `early_exit`).
 - **Decoupled Localization (`LocaleAdapter`)**: Translation strings are template-driven in `config.json` (Hindi, English, etc.) without hardcoded conditionals.
 - **Configurable Audio**: Supports silent operation or native XDG sound events (`canberra-gtk-play`).
 - **Break-Active Marker**: Writes its PID to `$XDG_RUNTIME_DIR/xdg-pause.active` while the overlay is up, so tools that synthesise keys (`ydotool`, dictation such as Voxtype's `pre_output_command`) can wait instead of typing into the overlay.
@@ -111,6 +113,13 @@ Configuration file is automatically created at `~/.config/xdg-pause/config.json`
     "strict_interval_seconds": 30,
     "require_early_exit_reason": true,
     "min_reason_chars": 5
+  },
+  "hooks": {
+    "break_start": null,
+    "break_complete": null,
+    "early_exit": null,
+    "snooze_start": null,
+    "snooze_end": null
   },
   "ui": {
     "bar_width": 560,
