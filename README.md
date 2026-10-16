@@ -23,9 +23,11 @@ Attempting to enforce breaks by putting displays into power-saving standby via D
 
 - **Minimalist Aesthetic**: Pure pitch-black background (`#000000`) with a thin, 6px depleting progress bar and centered countdown label.
 - **Multi-Monitor Safe**: Spans all connected monitors without dropping display signals.
-- **Strict Mode**:
+- **Strict Mode + Deliberate Early-Exit Friction**:
   - **Mini Breaks (30s)**: Non-cancellable. Closes automatically when countdown completes.
-  - **Long Breaks (600s)**: Strict for the first 30 seconds; permits voluntary early return (`Esc` or resume button) afterward.
+  - **Long Breaks (600s)**: Strict for the first 30 seconds; after that, pressing `Esc` (or clicking the resume button) opens an inline reason prompt (`require_early_exit_reason: true`, `min_reason_chars: 5`) so you cannot reflexively dismiss a 10-minute break by muscle memory. You must type a conscious reason and press `Enter` (logged to `xdg-pause.log`), or press `Esc` again to cancel the prompt and stay in the break.
+- **Built-in Systemd Timer Snooze (`xdg-pause snooze`)**:
+  - Pause the recurring break timer for a fixed duration (`xdg-pause snooze 90`) using a transient `systemd-run --user --on-active` timer that automatically resumes breaks when the window expires, or pause indefinitely (`xdg-pause snooze start` / `xdg-pause snooze end`).
 - **Decoupled Localization (`LocaleAdapter`)**: Translation strings are template-driven in `config.json` (Hindi, English, etc.) without hardcoded conditionals.
 - **Configurable Audio**: Supports silent operation or native XDG sound events (`canberra-gtk-play`).
 - **Break-Active Marker**: Writes its PID to `$XDG_RUNTIME_DIR/xdg-pause.active` while the overlay is up, so tools that synthesise keys (`ydotool`, dictation such as Voxtype's `pre_output_command`) can wait instead of typing into the overlay.
@@ -106,7 +108,9 @@ Configuration file is automatically created at `~/.config/xdg-pause/config.json`
   "durations": {
     "mini_seconds": 30,
     "long_seconds": 600,
-    "strict_interval_seconds": 30
+    "strict_interval_seconds": 30,
+    "require_early_exit_reason": true,
+    "min_reason_chars": 5
   },
   "ui": {
     "bar_width": 560,
@@ -121,13 +125,17 @@ Configuration file is automatically created at `~/.config/xdg-pause/config.json`
       "seconds_remaining": "{s} सेकंड शेष है",
       "minutes_remaining": "{m} मिनट शेष है",
       "minutes_seconds_remaining": "{m} मिनट {s} सेकंड शेष है",
-      "resume_button": "वापस जाएं (Esc)"
+      "resume_button": "वापस जाएं (Esc)",
+      "early_exit_prompt": "समय से पहले ब्रेक छोड़ने का कारण लिखें (Enter दबाएं):",
+      "early_exit_placeholder": "कम से कम {min_chars} अक्षर..."
     },
     "en": {
       "seconds_remaining": "{s} second{s_plural} remaining",
       "minutes_remaining": "{m} minute{m_plural} remaining",
       "minutes_seconds_remaining": "{m}m {s}s remaining",
-      "resume_button": "Resume Work (Esc)"
+      "resume_button": "Resume Work (Esc)",
+      "early_exit_prompt": "Why end this break early? (Press Enter to confirm):",
+      "early_exit_placeholder": "At least {min_chars} characters..."
     }
   }
 }

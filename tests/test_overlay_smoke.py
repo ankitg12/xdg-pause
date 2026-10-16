@@ -9,7 +9,8 @@ if "GTK_MODULES" in os.environ:
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 import gi
-gi.require_version('Gtk', '3.0')
+
+gi.require_version("Gtk", "3.0")
 from gi.repository import Gtk, Gdk, GLib
 import xdg_pause
 
@@ -27,9 +28,7 @@ class TestOverlaySmoke(unittest.TestCase):
         self.assertGreater(n_monitors, 0)
 
         overlay = xdg_pause.XdgPauseOverlay(
-            break_type="mini",
-            override_duration=1,
-            override_strict=1
+            break_type="mini", override_duration=1, override_strict=1
         )
 
         # Confirm one window, label, progress bar, and clock label per monitor
@@ -48,6 +47,38 @@ class TestOverlaySmoke(unittest.TestCase):
 
         # Cleanly tear down
         overlay.finish_break(early=True)
+        while Gtk.events_pending():
+            Gtk.main_iteration()
+
+    def test_long_break_reason_prompt(self):
+        display = Gdk.Display.get_default()
+        if not display:
+            self.skipTest("No GDK display available in headless environment")
+
+        overlay = xdg_pause.XdgPauseOverlay(
+            break_type="long",
+            override_duration=600,
+            override_strict=0,
+        )
+        overlay.request_early_exit()
+        self.assertTrue(overlay.prompting_reason)
+        self.assertTrue(overlay.reason_boxes[0].get_visible())
+
+        # Too-short reason should mark entry invalid and NOT finish break
+        overlay.reason_entries[0].set_text("abc")
+        overlay.on_reason_activate(overlay.reason_entries[0])
+        self.assertTrue(
+            overlay.reason_entries[0].get_style_context().has_class("invalid")
+        )
+
+        # Cancel returns to button
+        overlay.cancel_early_exit_prompt()
+        self.assertFalse(overlay.prompting_reason)
+
+        # Valid reason (>= 5 chars) finishes break with reason logged
+        overlay.request_early_exit()
+        overlay.reason_entries[0].set_text("production call")
+        overlay.on_reason_activate(overlay.reason_entries[0])
         while Gtk.events_pending():
             Gtk.main_iteration()
 

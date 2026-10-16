@@ -120,6 +120,8 @@ DEFAULT_CONFIG = {
         "mini_seconds": 30,
         "long_seconds": 600,
         "strict_interval_seconds": 30,
+        "require_early_exit_reason": True,
+        "min_reason_chars": 5,
     },
     "ui": {
         "bar_width": "auto",
@@ -139,12 +141,16 @@ DEFAULT_CONFIG = {
             "minutes_remaining": "{m} मिनट शेष है",
             "minutes_seconds_remaining": "{m} मिनट {s} सेकंड शेष है",
             "resume_button": "वापस जाएं (Esc)",
+            "early_exit_prompt": "समय से पहले ब्रेक छोड़ने का कारण लिखें (Enter दबाएं):",
+            "early_exit_placeholder": "कम से कम {min_chars} अक्षर...",
         },
         "en": {
             "seconds_remaining": "{s} second{s_plural} remaining",
             "minutes_remaining": "{m} minute{m_plural} remaining",
             "minutes_seconds_remaining": "{m}m {s}s remaining",
             "resume_button": "Resume Work (Esc)",
+            "early_exit_prompt": "Why end this break early? (Press Enter to confirm):",
+            "early_exit_placeholder": "At least {min_chars} characters...",
         },
     },
 }
@@ -166,10 +172,18 @@ def load_config():
     try:
         with open(CONFIG_PATH, "r", encoding="utf-8") as f:
             user_cfg = json.load(f)
-            merged = DEFAULT_CONFIG.copy()
+            merged = json.loads(json.dumps(DEFAULT_CONFIG))
             for k, v in user_cfg.items():
-                if isinstance(v, dict) and k in merged:
+                if isinstance(v, dict) and k in merged and isinstance(merged[k], dict):
                     merged[k] = {**merged[k], **v}
+                    for sub_k, sub_v in v.items():
+                        if isinstance(sub_v, dict) and isinstance(
+                            DEFAULT_CONFIG[k].get(sub_k), dict
+                        ):
+                            merged[k][sub_k] = {
+                                **DEFAULT_CONFIG[k][sub_k],
+                                **sub_v,
+                            }
                 else:
                     merged[k] = v
             return merged
@@ -214,6 +228,18 @@ class LocaleAdapter:
     def get_resume_button_label(self):
         return self.strings.get("resume_button", "Resume Work (Esc)")
 
+    def get_early_exit_prompt(self):
+        return self.strings.get(
+            "early_exit_prompt",
+            "Why end this break early? (Press Enter to confirm):",
+        )
+
+    def get_early_exit_placeholder(self, min_chars=5):
+        tmpl = self.strings.get(
+            "early_exit_placeholder", "At least {min_chars} characters..."
+        )
+        return tmpl.format(min_chars=min_chars)
+
 
 SUSPEND_KEYBINDINGS = [
     "switch-applications",
@@ -245,6 +271,11 @@ class XdgPauseOverlay:
         else:
             self.strict_interval = dur_cfg.get("strict_interval_seconds", 30)
 
+        self.require_reason = bool(dur_cfg.get("require_early_exit_reason", True))
+        self.min_reason_chars = int(dur_cfg.get("min_reason_chars", 5))
+        self.prompting_reason = False
+        self._syncing_entries = False
+
         self.ui_cfg = self.cfg.get("ui", {})
         self.sounds_cfg = self.cfg.get("sounds", {})
         lang = self.cfg.get("language", "hi")
@@ -256,6 +287,8 @@ class XdgPauseOverlay:
         self.labels = []
         self.progress_bars = []
         self.resume_buttons = []
+        self.reason_boxes = []
+        self.reason_entries = []
         self.clock_labels = []
         self.clock_format = self.ui_cfg.get("clock_format", "%H:%M  •  %a, %d %b")
         self.clock_position = self.ui_cfg.get("clock_position", "bottom-right").lower()
@@ -365,6 +398,26 @@ class XdgPauseOverlay:
             border-color: #666666;
             background-color: #111111;
         }}
+        label.reason-prompt {{
+            color: #aaaaaa;
+            font-family: 'Noto Sans Devanagari', 'Noto Sans', sans-serif;
+            font-size: 13px;
+            margin-top: 16px;
+            margin-bottom: 6px;
+        }}
+        entry.reason-entry {{
+            background-color: #111111;
+            color: #ffffff;
+            caret-color: #ffffff;
+            font-family: 'Noto Sans Devanagari', 'Noto Sans', sans-serif;
+            font-size: 14px;
+            padding: 6px 12px;
+            border-radius: 4px;
+            border: 1px solid #444444;
+        }}
+        entry.reason-entry.invalid {{
+            border-color: #aa3333;
+        }}
         """.encode("utf-8")
 
         style_provider = Gtk.CssProvider()
@@ -426,9 +479,33 @@ class XdgPauseOverlay:
                 btn.get_style_context().add_class("resume-btn")
                 btn.set_sensitive(False)
                 btn.set_no_show_all(True)
-                btn.connect("clicked", lambda b: self.finish_break(early=True))
+                btn.connect("clicked", lambda b: self.request_early_exit())
                 box.pack_start(btn, False, False, 0)
                 self.resume_buttons.append(btn)
+
+                rbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+                rbox.set_halign(Gtk.Align.CENTER)
+                rbox.set_no_show_all(True)
+
+                rlbl = Gtk.Label(label=self.locale.get_early_exit_prompt())
+                rlbl.get_style_context().add_class("reason-prompt")
+                rlbl.show()
+
+                rentry = Gtk.Entry()
+                rentry.get_style_context().add_class("reason-entry")
+                rentry.set_width_chars(36)
+                rentry.set_placeholder_text(
+                    self.locale.get_early_exit_placeholder(self.min_reason_chars)
+                )
+                rentry.connect("changed", self.on_reason_changed)
+                rentry.connect("activate", self.on_reason_activate)
+                rentry.show()
+
+                rbox.pack_start(rlbl, False, False, 0)
+                rbox.pack_start(rentry, False, False, 0)
+                box.pack_start(rbox, False, False, 0)
+                self.reason_boxes.append(rbox)
+                self.reason_entries.append(rentry)
 
             overlay = Gtk.Overlay()
             overlay.add(box)
@@ -472,15 +549,69 @@ class XdgPauseOverlay:
             self.progress_bars.append(pbar)
             self.clock_labels.append(clock_label)
 
+    def request_early_exit(self):
+        if not self.require_reason:
+            self.finish_break(early=True)
+            return
+        if not self.prompting_reason:
+            self.prompting_reason = True
+            logger.info("Prompting user for early break exit reason")
+            for btn in self.resume_buttons:
+                btn.hide()
+            for rbox in self.reason_boxes:
+                rbox.show()
+            if self.reason_entries:
+                self.reason_entries[0].grab_focus()
+
+    def cancel_early_exit_prompt(self):
+        if not self.prompting_reason:
+            return
+        self.prompting_reason = False
+        for rentry in self.reason_entries:
+            rentry.set_text("")
+            rentry.get_style_context().remove_class("invalid")
+        for rbox in self.reason_boxes:
+            rbox.hide()
+        for btn in self.resume_buttons:
+            btn.show()
+            btn.set_sensitive(True)
+
+    def on_reason_changed(self, entry):
+        if self._syncing_entries:
+            return
+        self._syncing_entries = True
+        try:
+            txt = entry.get_text()
+            for e in self.reason_entries:
+                e.get_style_context().remove_class("invalid")
+                if e is not entry:
+                    e.set_text(txt)
+        finally:
+            self._syncing_entries = False
+
+    def on_reason_activate(self, entry):
+        reason = entry.get_text().strip()
+        if len(reason) < self.min_reason_chars:
+            for e in self.reason_entries:
+                e.get_style_context().add_class("invalid")
+            return
+        self.finish_break(early=True, reason=reason)
+
     def on_key_press(self, win, event):
         elapsed = time.time() - self.start_time
         logger.debug(
             f"Key press intercepted: keyval={event.keyval}, elapsed={elapsed:.1f}s"
         )
         if self.break_type == "long" and elapsed >= self.strict_interval:
+            if self.prompting_reason:
+                if event.keyval == Gdk.KEY_Escape:
+                    self.cancel_early_exit_prompt()
+                    return True
+                # Let key events reach Gtk.Entry so the user can type their reason
+                return False
             if event.keyval in (Gdk.KEY_Escape, Gdk.KEY_Return, Gdk.KEY_space):
-                logger.info("Early break exit triggered by user via keypress")
-                self.finish_break(early=True)
+                logger.info("Early break exit requested by user via keypress")
+                self.request_early_exit()
                 return True
         return True
 
@@ -501,7 +632,11 @@ class XdgPauseOverlay:
         for clk in self.clock_labels:
             clk.set_text(now_str)
 
-        if self.break_type == "long" and elapsed >= self.strict_interval:
+        if (
+            self.break_type == "long"
+            and elapsed >= self.strict_interval
+            and not self.prompting_reason
+        ):
             for btn in self.resume_buttons:
                 if not btn.is_visible():
                     btn.show()
@@ -641,7 +776,7 @@ class XdgPauseOverlay:
         except OSError:
             pass
 
-    def finish_break(self, early=False):
+    def finish_break(self, early=False, reason=None):
         if hasattr(self, "timer_source_id") and self.timer_source_id:
             GLib.source_remove(self.timer_source_id)
             self.timer_source_id = None
@@ -658,7 +793,12 @@ class XdgPauseOverlay:
         end_key = f"{self.break_type}_end"
         self.play_sound(self.sounds_cfg.get(end_key, "silence"))
 
-        status = "early user resume" if early else "completed countdown"
+        if early and reason:
+            status = f"early user resume (reason: {reason!r})"
+        elif early:
+            status = "early user resume"
+        else:
+            status = "completed countdown"
         logger.info(f"Destroying overlay windows ({status})")
 
         for win in self.windows:

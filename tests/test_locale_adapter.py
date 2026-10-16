@@ -43,6 +43,8 @@ class TestLocaleAdapter(unittest.TestCase):
 
         adapter_en = LocaleAdapter(language="en", locales_dict=self.locales)
         self.assertEqual(adapter_en.get_resume_button_label(), "Resume Work (Esc)")
+        self.assertIn("कारण", adapter_hi.get_early_exit_prompt())
+        self.assertIn("5", adapter_en.get_early_exit_placeholder(5))
 
     def test_unknown_language_fallback(self):
         adapter = LocaleAdapter(language="unknown_xyz", locales_dict=self.locales)
