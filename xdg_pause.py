@@ -38,24 +38,7 @@ os.environ.setdefault("GDK_BACKEND", "x11")
 
 
 def _ensure_xauthority():
-    """Discover Mutter Xwayland auth cookie when XAUTHORITY is missing or points to a stale cookie."""
-    cur = os.environ.get("XAUTHORITY")
-    if cur and os.path.exists(cur):
-        return
-    try:
-        env_out = subprocess.check_output(
-            ["systemctl", "--user", "show-environment"],
-            text=True,
-            stderr=subprocess.DEVNULL,
-        )
-        for line in env_out.splitlines():
-            if line.startswith("XAUTHORITY="):
-                candidate = line.split("=", 1)[1].strip()
-                if os.path.exists(candidate):
-                    os.environ["XAUTHORITY"] = candidate
-                    return
-    except Exception:
-        pass
+    """Always prefer the newest Mutter Xwayland auth cookie over a stale multiplexer XAUTHORITY."""
     rt_dir = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
     auths = sorted(
         glob.glob(os.path.join(rt_dir, ".mutter-Xwaylandauth.*")),
