@@ -70,6 +70,22 @@ ACTIVE_MARKER = (
     pathlib.Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "xdg-pause.active"
 )
 
+
+def _is_overlay_already_active():
+    """Return True if another xdg-pause overlay PID recorded in ACTIVE_MARKER is alive."""
+    try:
+        if ACTIVE_MARKER.exists():
+            pid_str = ACTIVE_MARKER.read_text(encoding="utf-8").strip()
+            if pid_str.isdigit():
+                pid = int(pid_str)
+                if pid != os.getpid():
+                    os.kill(pid, 0)
+                    return True
+    except OSError:
+        pass
+    return False
+
+
 import gi
 
 gi.require_version("Gtk", "3.0")
@@ -1050,6 +1066,7 @@ def main():
             "Examples:\n"
             "  xdg-pause                     # Mini break using configured duration\n"
             "  xdg-pause long                # Long break (600s with 30s strict interval)\n"
+            "  xdg-pause auto                # Long break at :45-:54, mini break otherwise\n"
             "  xdg-pause 45                  # Custom 45-second break\n"
             "  xdg-pause snooze 90           # Snooze break timer for 90 minutes\n"
             "  xdg-pause snooze start        # Snooze break timer indefinitely\n"
@@ -1061,7 +1078,7 @@ def main():
         "mode",
         nargs="?",
         default="mini",
-        help="Break mode ('mini', 'long', integer seconds, or 'snooze')",
+        help="Break mode ('mini', 'long', 'auto', integer seconds, or 'snooze')",
     )
     parser.add_argument(
         "extra",
@@ -1096,6 +1113,9 @@ def main():
         b_type = "long"
     elif mode_lower in ("mini", "microbreak"):
         b_type = "mini"
+    elif mode_lower == "auto":
+        now_min = datetime.datetime.now().minute
+        b_type = "long" if 45 <= now_min <= 54 else "mini"
     elif mode_lower.isdigit():
         override_dur = int(mode_lower)
         if override_strict is None:
@@ -1103,6 +1123,10 @@ def main():
     else:
         logger.error(f"Unknown mode: {args.mode}")
         sys.exit(1)
+
+    if _is_overlay_already_active():
+        logger.info("SKIP break-in-progress (active marker PID alive)")
+        sys.exit(0)
 
     Gtk.init_check()
     XdgPauseOverlay(

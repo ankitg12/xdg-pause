@@ -4,7 +4,7 @@ After=graphical-session.target
 
 [Service]
 Type=oneshot
-ExecStart=/usr/local/bin/xdg-pause
+ExecStart=%h/.local/bin/xdg-pause auto
 TimeoutSec=900
 StandardOutput=journal
 StandardError=journal

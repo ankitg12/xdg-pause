@@ -2,8 +2,9 @@
 Description=Cadence Timer for xdg-pause (Runs every 10 minutes)
 
 [Timer]
-OnCalendar=*:00,10,20,30,40,50:00
-Persistent=true
+OnCalendar=*:0/10:00
+AccuracySec=1s
+Persistent=false
 
 [Install]
 WantedBy=timers.target

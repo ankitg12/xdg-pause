@@ -78,6 +78,9 @@ xdg-pause
 # Long break (600s total, first 30s strict, then allows Esc)
 xdg-pause long
 
+# Clock-aligned automatic mode (:45-:54 -> long break, otherwise -> mini break)
+xdg-pause auto
+
 # Custom duration in seconds
 xdg-pause 45
 
