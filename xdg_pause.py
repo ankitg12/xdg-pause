@@ -23,6 +23,7 @@ import logging
 import pathlib
 import atexit
 import signal
+import glob
 
 # Strip legacy Ubuntu Unity appmenu-gtk-module from GTK_MODULES before GTK loads.
 # appmenu-gtk-module attaches to window realization and asserts on Wayland surfaces without menus.
@@ -34,6 +35,36 @@ if "GTK_MODULES" in os.environ:
 # Native GTK3 Wayland ignores fullscreen_on_monitor and keep_above under Mutter, so the
 # overlay lands on the wrong screen and can be covered. Xwayland honours both; no-op on Xorg.
 os.environ.setdefault("GDK_BACKEND", "x11")
+
+
+def _ensure_xauthority():
+    """Discover Mutter Xwayland auth cookie when invoked from shells missing XAUTHORITY."""
+    if os.environ.get("XAUTHORITY"):
+        return
+    try:
+        env_out = subprocess.check_output(
+            ["systemctl", "--user", "show-environment"],
+            text=True,
+            stderr=subprocess.DEVNULL,
+        )
+        for line in env_out.splitlines():
+            if line.startswith("XAUTHORITY="):
+                candidate = line.split("=", 1)[1].strip()
+                if os.path.exists(candidate):
+                    os.environ["XAUTHORITY"] = candidate
+                    return
+    except Exception:
+        pass
+    rt_dir = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
+    auths = sorted(
+        glob.glob(os.path.join(rt_dir, ".mutter-Xwaylandauth.*")),
+        key=os.path.getmtime,
+    )
+    if auths:
+        os.environ["XAUTHORITY"] = auths[-1]
+
+
+_ensure_xauthority()
 
 ACTIVE_MARKER = (
     pathlib.Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "xdg-pause.active"
@@ -637,17 +668,160 @@ class XdgPauseOverlay:
             Gtk.main_quit()
 
 
+SNOOZE_TIMER = os.environ.get("XDG_PAUSE_TIMER", "xdg-fixed-break.timer")
+SNOOZE_RESUME_UNIT = "break-snooze-resume"
+
+
+def _snooze_cancel_resume():
+    subprocess.run(
+        ["systemctl", "--user", "stop", f"{SNOOZE_RESUME_UNIT}.timer"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    subprocess.run(
+        [
+            "systemctl",
+            "--user",
+            "reset-failed",
+            f"{SNOOZE_RESUME_UNIT}.service",
+            f"{SNOOZE_RESUME_UNIT}.timer",
+        ],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
+def _snooze_status():
+    res = subprocess.run(
+        ["systemctl", "--user", "is-active", SNOOZE_TIMER],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    print(f"break timer: {res.stdout.strip() or 'inactive'}")
+    subprocess.run(
+        [
+            "systemctl",
+            "--user",
+            "list-timers",
+            "--all",
+            "--no-pager",
+            SNOOZE_TIMER,
+            f"{SNOOZE_RESUME_UNIT}.timer",
+        ]
+    )
+
+
+def _kill_running_overlays():
+    my_pid = str(os.getpid())
+    res = subprocess.run(
+        ["pgrep", "-f", "xdg_pause.py|bin/xdg-pause"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    for pid in res.stdout.split():
+        if pid != my_pid:
+            try:
+                os.kill(int(pid), signal.SIGTERM)
+            except OSError:
+                pass
+
+
+def handle_snooze(args_list):
+    """Pause or resume the xdg-fixed-break systemd user timer."""
+    usage_msg = "usage: xdg-pause snooze [start [MINUTES] | MINUTES | end | resume | on | status]"
+    if not args_list:
+        action = "start"
+        mins = None
+    elif args_list[0] in ("-h", "--help"):
+        print(usage_msg)
+        return 0
+    elif args_list[0] == "start":
+        action = "start"
+        mins = args_list[1] if len(args_list) > 1 else None
+        if len(args_list) > 2 or (mins is not None and not mins.isdigit()):
+            print(usage_msg, file=sys.stderr)
+            return 2
+    elif args_list[0] in ("end", "resume", "on"):
+        if len(args_list) > 1:
+            print(usage_msg, file=sys.stderr)
+            return 2
+        _snooze_cancel_resume()
+        subprocess.run(["systemctl", "--user", "start", SNOOZE_TIMER], check=True)
+        _snooze_status()
+        return 0
+    elif args_list[0] == "status":
+        if len(args_list) > 1:
+            print(usage_msg, file=sys.stderr)
+            return 2
+        _snooze_status()
+        return 0
+    elif args_list[0].isdigit() and len(args_list) == 1:
+        action = "start"
+        mins = args_list[0]
+    else:
+        print(usage_msg, file=sys.stderr)
+        return 2
+
+    if action == "start":
+        _snooze_cancel_resume()
+        subprocess.run(["systemctl", "--user", "stop", SNOOZE_TIMER], check=True)
+        _kill_running_overlays()
+        if mins:
+            subprocess.run(
+                [
+                    "systemd-run",
+                    "--user",
+                    "--quiet",
+                    f"--unit={SNOOZE_RESUME_UNIT}",
+                    f"--on-active={mins}m",
+                    "--description=Resume xdg-pause breaks after snooze",
+                    "systemctl",
+                    "--user",
+                    "start",
+                    SNOOZE_TIMER,
+                ],
+                check=True,
+            )
+            until = (
+                datetime.datetime.now() + datetime.timedelta(minutes=int(mins))
+            ).strftime("%H:%M")
+            print(f"Breaks snoozed for {mins} min (until {until}).")
+        else:
+            print("Breaks snoozed until 'xdg-pause snooze end'.")
+        _snooze_status()
+    return 0
+
+
 def main():
+    if len(sys.argv) > 1 and sys.argv[1].lower() == "snooze":
+        sys.exit(handle_snooze(sys.argv[2:]))
+
     parser = argparse.ArgumentParser(
         description="xdg-pause: Minimalist native multi-monitor break overlay for Linux Wayland/X11",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog="Examples:\n  xdg-pause              # Mini break using configured duration\n  xdg-pause long         # Long break (600s with 30s strict interval)\n  xdg-pause 45           # Custom 45-second break\n",
+        epilog=(
+            "Examples:\n"
+            "  xdg-pause                     # Mini break using configured duration\n"
+            "  xdg-pause long                # Long break (600s with 30s strict interval)\n"
+            "  xdg-pause 45                  # Custom 45-second break\n"
+            "  xdg-pause snooze 90           # Snooze break timer for 90 minutes\n"
+            "  xdg-pause snooze start        # Snooze break timer indefinitely\n"
+            "  xdg-pause snooze end          # Resume break timer immediately\n"
+            "  xdg-pause snooze status       # Show break timer and snooze status\n"
+        ),
     )
     parser.add_argument(
         "mode",
         nargs="?",
         default="mini",
-        help="Break mode ('mini', 'long', or integer seconds)",
+        help="Break mode ('mini', 'long', integer seconds, or 'snooze')",
+    )
+    parser.add_argument(
+        "extra",
+        nargs="*",
+        help="Subcommand arguments when mode is 'snooze' (start [MINUTES] | MINUTES | end | status)",
     )
     parser.add_argument(
         "-v", "--version", action="version", version=f"xdg-pause {__version__}"
@@ -662,11 +836,17 @@ def main():
 
     args = parser.parse_args()
 
+    mode_lower = args.mode.lower()
+    if mode_lower == "snooze":
+        sys.exit(handle_snooze(args.extra))
+    if args.extra:
+        logger.error(f"Unexpected extra arguments: {' '.join(args.extra)}")
+        sys.exit(2)
+
     b_type = "mini"
     override_dur = None
     override_strict = args.strict
 
-    mode_lower = args.mode.lower()
     if mode_lower in ("long", "break"):
         b_type = "long"
     elif mode_lower in ("mini", "microbreak"):

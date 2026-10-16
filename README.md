@@ -79,6 +79,12 @@ xdg-pause 45
 
 # Custom duration with custom strict interval
 xdg-pause 300 --strict 60
+
+# Snooze the systemd break timer (e.g. for a 90-minute meeting, or until 'end')
+xdg-pause snooze 90
+xdg-pause snooze start
+xdg-pause snooze end
+xdg-pause snooze status
 ```
 
 ---
