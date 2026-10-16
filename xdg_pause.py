@@ -845,6 +845,21 @@ def dispatch_hook(
     """Fire non-blocking hook command from config['hooks'][event_name] and ~/.config/xdg-pause/hooks/<event_name>.d/."""
     if hooks_cfg is None:
         hooks_cfg = load_config().get("hooks", {})
+    payload_bytes = (
+        json.dumps(
+            {
+                "event": str(event_name),
+                "mode": str(mode),
+                "duration": int(duration),
+                "elapsed": int(elapsed),
+                "remaining": int(remaining),
+                "reason": str(reason or ""),
+                "timestamp": datetime.datetime.now().astimezone().isoformat(),
+            },
+            ensure_ascii=False,
+        )
+        + "\n"
+    ).encode("utf-8")
     env = os.environ.copy()
     env.update(
         {
@@ -856,17 +871,28 @@ def dispatch_hook(
             "XDG_PAUSE_REASON": str(reason or ""),
         }
     )
+
+    def _spawn(target, use_shell=False):
+        proc = subprocess.Popen(
+            target,
+            shell=use_shell,
+            env=env,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        if proc.stdin:
+            try:
+                proc.stdin.write(payload_bytes)
+                proc.stdin.close()
+            except OSError:
+                pass
+
     cmd = hooks_cfg.get(event_name)
     if cmd:
         try:
             logger.info(f"Running hook '{event_name}': {cmd}")
-            subprocess.Popen(
-                cmd,
-                shell=True,
-                env=env,
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.DEVNULL,
-            )
+            _spawn(cmd, use_shell=True)
         except Exception as e:
             logger.warning(f"Hook '{event_name}' failed to launch: {e}")
 
@@ -876,12 +902,7 @@ def dispatch_hook(
             if script.is_file() and os.access(script, os.X_OK):
                 try:
                     logger.info(f"Running hook script '{event_name}': {script}")
-                    subprocess.Popen(
-                        [str(script)],
-                        env=env,
-                        stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL,
-                    )
+                    _spawn([str(script)], use_shell=False)
                 except Exception as e:
                     logger.warning(f"Hook script {script} failed: {e}")
 

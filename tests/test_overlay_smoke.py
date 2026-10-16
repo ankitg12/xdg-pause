@@ -74,16 +74,14 @@ class TestOverlaySmoke(unittest.TestCase):
         # Cancel returns to button
         overlay.cancel_early_exit_prompt()
         self.assertFalse(overlay.prompting_reason)
-
         # Valid reason (>= 5 chars) finishes break with reason logged and runs early_exit hook
+        import json
         import tempfile
 
         with tempfile.NamedTemporaryFile(delete=False) as tf:
             hook_out = tf.name
         try:
-            overlay.hooks_cfg["early_exit"] = (
-                f'printf "%s|%s|%s" "$XDG_PAUSE_EVENT" "$XDG_PAUSE_MODE" "$XDG_PAUSE_REASON" > {hook_out}'
-            )
+            overlay.hooks_cfg["early_exit"] = f"cat > {hook_out}"
             overlay.request_early_exit()
             overlay.reason_entries[0].set_text("production call")
             overlay.on_reason_activate(overlay.reason_entries[0])
@@ -96,7 +94,10 @@ class TestOverlaySmoke(unittest.TestCase):
                     break
                 _t.sleep(0.05)
             with open(hook_out, "r", encoding="utf-8") as f:
-                self.assertEqual(f.read(), "early_exit|long|production call")
+                data = json.loads(f.read())
+                self.assertEqual(data["event"], "early_exit")
+                self.assertEqual(data["mode"], "long")
+                self.assertEqual(data["reason"], "production call")
         finally:
             if os.path.exists(hook_out):
                 os.unlink(hook_out)
