@@ -38,8 +38,9 @@ os.environ.setdefault("GDK_BACKEND", "x11")
 
 
 def _ensure_xauthority():
-    """Discover Mutter Xwayland auth cookie when invoked from shells missing XAUTHORITY."""
-    if os.environ.get("XAUTHORITY"):
+    """Discover Mutter Xwayland auth cookie when XAUTHORITY is missing or points to a stale cookie."""
+    cur = os.environ.get("XAUTHORITY")
+    if cur and os.path.exists(cur):
         return
     try:
         env_out = subprocess.check_output(
