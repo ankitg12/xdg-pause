@@ -32,13 +32,23 @@ if "GTK_MODULES" in os.environ:
         [m for m in os.environ["GTK_MODULES"].split(":") if "appmenu" not in m]
     )
 
-# Native GTK3 Wayland ignores fullscreen_on_monitor and keep_above under Mutter, so the
-# overlay lands on the wrong screen and can be covered. Xwayland honours both; no-op on Xorg.
-os.environ.setdefault("GDK_BACKEND", "x11")
+# Backend selection: on Hyprland (or any layer-shell compositor) use the native
+# Wayland layer-shell backend (per-monitor OVERLAY surfaces, exclusive keyboard).
+# On GNOME/Mutter keep the Xwayland path: native GTK3 Wayland ignores
+# fullscreen_on_monitor and keep_above there. No-op on Xorg.
+_DESKTOP = os.environ.get("XDG_CURRENT_DESKTOP", "")
+_USE_LAYER_SHELL = (
+    "Hyprland" in _DESKTOP
+    or os.environ.get("XDG_PAUSE_BACKEND", "").lower() == "layer-shell"
+)
+if not _USE_LAYER_SHELL:
+    os.environ.setdefault("GDK_BACKEND", "x11")
 
 
 def _ensure_xauthority():
     """Always prefer the newest Mutter Xwayland auth cookie over a stale multiplexer XAUTHORITY."""
+    if _USE_LAYER_SHELL:
+        return
     rt_dir = os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")
     auths = sorted(
         glob.glob(os.path.join(rt_dir, ".mutter-Xwaylandauth.*")),
@@ -47,8 +57,6 @@ def _ensure_xauthority():
     if auths:
         os.environ["XAUTHORITY"] = auths[-1]
 
-
-_ensure_xauthority()
 
 ACTIVE_MARKER = (
     pathlib.Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "xdg-pause.active"
@@ -75,7 +83,11 @@ import gi
 gi.require_version("Gtk", "3.0")
 gi.require_version("Gdk", "3.0")
 gi.require_version("Gio", "2.0")
+if _USE_LAYER_SHELL:
+    gi.require_version("GtkLayerShell", "0.1")
 from gi.repository import Gtk, Gdk, Gio, GLib
+if _USE_LAYER_SHELL:
+    from gi.repository import GtkLayerShell
 
 __version__ = "0.2.0"
 
@@ -314,8 +326,9 @@ class XdgPauseOverlay:
         self.saved_keybindings = {}
         self.wm_settings = None
 
-        self.setup_gnome_overview_suppressor()
-        self.suspend_gnome_switchers()
+        if not _USE_LAYER_SHELL:
+            self.setup_gnome_overview_suppressor()
+            self.suspend_gnome_switchers()
 
         # Marker for other tools (e.g. voxtype pre_output_command) to defer keystroke
         # injection until the overlay is gone. Holds our PID so readers can ignore a
@@ -445,20 +458,34 @@ class XdgPauseOverlay:
 
         style_provider = Gtk.CssProvider()
         style_provider.load_from_data(css)
-        Gtk.StyleContext.add_provider_for_screen(
-            Gdk.Screen.get_default(),
-            style_provider,
-            Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
-        )
+        screen = Gdk.Screen.get_default()
+        if screen is not None:
+            Gtk.StyleContext.add_provider_for_screen(
+                screen,
+                style_provider,
+                Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+            )
+        else:
+            Gtk.StyleContext.add_provider_for_display(
+                Gdk.Display.get_default(),
+                style_provider,
+                Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
+            )
 
     def create_windows(self):
         display = Gdk.Display.get_default()
-        screen = display.get_default_screen()
         n_monitors = display.get_n_monitors()
+        if _USE_LAYER_SHELL:
+            screen = None
+        else:
+            screen = display.get_default_screen()
         bar_w = self.ui_cfg.get("bar_width", 560)
         bar_h = self.ui_cfg.get("bar_height", 6)
 
-        logger.info(f"Detected {n_monitors} monitors on display")
+        logger.info(
+            f"Detected {n_monitors} monitors on display "
+            f"(backend={'layer-shell' if _USE_LAYER_SHELL else 'x11-fullscreen'})"
+        )
 
         for mon_idx in range(n_monitors):
             mon = display.get_monitor(mon_idx)
@@ -468,8 +495,25 @@ class XdgPauseOverlay:
             win = Gtk.Window(type=Gtk.WindowType.TOPLEVEL)
             win.get_style_context().add_class("break-window")
             win.set_title("xdg-pause")
-            win.set_keep_above(True)
-            win.fullscreen_on_monitor(screen, mon_idx)
+            if _USE_LAYER_SHELL:
+                GtkLayerShell.init_for_window(win)
+                GtkLayerShell.set_layer(win, GtkLayerShell.Layer.OVERLAY)
+                GtkLayerShell.set_monitor(win, mon)
+                for edge in (
+                    GtkLayerShell.Edge.TOP,
+                    GtkLayerShell.Edge.BOTTOM,
+                    GtkLayerShell.Edge.LEFT,
+                    GtkLayerShell.Edge.RIGHT,
+                ):
+                    GtkLayerShell.set_anchor(win, edge, True)
+                GtkLayerShell.set_exclusive_zone(win, -1)
+                GtkLayerShell.set_keyboard_mode(
+                    win, GtkLayerShell.KeyboardMode.EXCLUSIVE
+                )
+                GtkLayerShell.set_namespace(win, "xdg-pause")
+            else:
+                win.set_keep_above(True)
+                win.fullscreen_on_monitor(screen, mon_idx)
 
             win.connect("delete-event", lambda w, e: True)
             win.connect("key-press-event", self.on_key_press)
@@ -561,7 +605,8 @@ class XdgPauseOverlay:
 
             win.add(overlay)
             win.show_all()
-            win.present()
+            if not _USE_LAYER_SHELL:
+                win.present()
 
             logger.info(
                 f"Monitor {mon_idx} ({desc} {geom.width}x{geom.height}): Window fullscreened and mapped"
