@@ -952,7 +952,10 @@ def dispatch_hook(
                     logger.warning(f"Hook script {script} failed: {e}")
 
 
-SNOOZE_TIMER = os.environ.get("XDG_PAUSE_TIMER", "xdg-fixed-break.timer")
+SNOOZE_TIMER = os.environ.get("XDG_PAUSE_TIMER", "xdg-pause.timer")
+# Back-compat: lx01 shipped units as xdg-fixed-break.{service,timer};
+# keep honoring an explicit XDG_PAUSE_TIMER=xdg-fixed-break.timer.
+_LEGACY_TIMER = "xdg-fixed-break.timer"
 SNOOZE_RESUME_UNIT = "break-snooze-resume"
 
 
@@ -991,6 +994,7 @@ def _snooze_status():
             "--all",
             "--no-pager",
             SNOOZE_TIMER,
+            _LEGACY_TIMER,
             f"{SNOOZE_RESUME_UNIT}.timer",
         ]
     )
@@ -1013,7 +1017,7 @@ def _kill_running_overlays():
 
 
 def handle_snooze(args_list):
-    """Pause or resume the xdg-fixed-break systemd user timer."""
+    """Pause or resume the xdg-pause systemd user timer."""
     usage_msg = "usage: xdg-pause snooze [start [MINUTES] | MINUTES | end | resume | on | status]"
     if not args_list:
         action = "start"
