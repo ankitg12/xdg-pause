@@ -173,6 +173,13 @@ To trigger breaks automatically every 10 minutes (clock-aligned with long breaks
 
 ---
 
+## Chromebook (dev-mode / Crostini)
+
+Same tool, third backend (`chromeos`, auto-detected under Sommelier): single
+fullscreen window, file-marker snooze that survives without `systemd --user`,
+and a boundary-aligned loop replacing the timer. No separate repo.
+See [docs/chromebook.md](docs/chromebook.md); install with `crostini/install.sh`.
+
 ## Authors
 
 - **Ankit Gaur** ([@ankitg12](https://github.com/ankitg12))

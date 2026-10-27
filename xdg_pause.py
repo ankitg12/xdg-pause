@@ -24,6 +24,7 @@ import pathlib
 import atexit
 import signal
 import glob
+import shutil
 
 # Strip legacy Ubuntu Unity appmenu-gtk-module from GTK_MODULES before GTK loads.
 # appmenu-gtk-module attaches to window realization and asserts on Wayland surfaces without menus.
@@ -32,16 +33,55 @@ if "GTK_MODULES" in os.environ:
         [m for m in os.environ["GTK_MODULES"].split(":") if "appmenu" not in m]
     )
 
-# Backend selection: on Hyprland (or any layer-shell compositor) use the native
-# Wayland layer-shell backend (per-monitor OVERLAY surfaces, exclusive keyboard).
-# On GNOME/Mutter keep the Xwayland path: native GTK3 Wayland ignores
-# fullscreen_on_monitor and keep_above there. No-op on Xorg.
-_DESKTOP = os.environ.get("XDG_CURRENT_DESKTOP", "")
-_USE_LAYER_SHELL = (
-    "Hyprland" in _DESKTOP
-    or os.environ.get("XDG_PAUSE_BACKEND", "").lower() == "layer-shell"
-)
+# Backend selection: three targets, one codebase.
+# - layer-shell: Hyprland (or forced via XDG_PAUSE_BACKEND=layer-shell) — native
+#   Wayland layer-shell backend (per-monitor OVERLAY surfaces, exclusive keyboard).
+# - chromeos: ChromeOS Crostini container (auto-detected, or forced via
+#   XDG_PAUSE_BACKEND=chromeos) — GTK over Sommelier's XWayland bridge. The window
+#   manager is ChromeOS, not Mutter: no layer-shell, no exclusive keyboard grab,
+#   no per-monitor surfaces. Single fullscreen window, best-effort input capture.
+# - x11 (default, or forced via XDG_PAUSE_BACKEND=x11): GNOME/Mutter Xwayland path.
+#   Native GTK3 Wayland ignores fullscreen_on_monitor and keep_above on Mutter.
+#   No-op on Xorg.
+def _detect_crostini():
+    """Best-effort check for "running inside ChromeOS Crostini". Any signal counts."""
+    if os.environ.get("SOMMELIER_VERSION"):
+        return True
+    for marker in ("/dev/.cros_milestone", "/etc/cros_chrome_version"):
+        if os.path.exists(marker):
+            return True
+    try:
+        with open(
+            "/sys/devices/virtual/dmi/id/product_name", encoding="utf-8"
+        ) as f:
+            if f.read().strip().lower() in ("crosvm", "chromebook"):
+                return True
+    except OSError:
+        pass
+    return False
+
+
+def _select_backend():
+    """Return 'layer-shell', 'chromeos', or 'x11'. Pure env/filesystem logic."""
+    forced = os.environ.get("XDG_PAUSE_BACKEND", "").lower()
+    if forced == "layer-shell":
+        return "layer-shell"
+    if forced == "chromeos":
+        return "chromeos"
+    if forced == "x11":
+        return "x11"
+    if "Hyprland" in os.environ.get("XDG_CURRENT_DESKTOP", ""):
+        return "layer-shell"
+    if _detect_crostini():
+        return "chromeos"
+    return "x11"
+
+
+_BACKEND = _select_backend()
+_USE_LAYER_SHELL = _BACKEND == "layer-shell"
+_USE_CHROMEOS = _BACKEND == "chromeos"
 if not _USE_LAYER_SHELL:
+    # Sommelier bridges X11; native Wayland GTK gets no layer-shell there either.
     os.environ.setdefault("GDK_BACKEND", "x11")
 
 
@@ -326,7 +366,10 @@ class XdgPauseOverlay:
         self.saved_keybindings = {}
         self.wm_settings = None
 
-        if not _USE_LAYER_SHELL:
+        # ChromeOS/Crostini: no GNOME Shell, no Mutter cookie, no D-Bus switchers.
+        # ChromeOS composites the Sommelier window itself; keep a best-effort
+        # single-window overlay and let Overview/Alt+Tab belong to the host.
+        if not _USE_LAYER_SHELL and not _USE_CHROMEOS:
             self.setup_gnome_overview_suppressor()
             self.suspend_gnome_switchers()
 
@@ -472,22 +515,35 @@ class XdgPauseOverlay:
                 Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION,
             )
 
+    def _chromeos_log(self, n_monitors):
+        logger.info(
+            "ChromeOS/Crostini backend: single fullscreen window "
+            f"(host manages {n_monitors} display(s) via Sommelier); Esc is the "
+            "host's escape hatch, strict mode cannot seal the room."
+        )
+
     def create_windows(self):
         display = Gdk.Display.get_default()
         n_monitors = display.get_n_monitors()
         if _USE_LAYER_SHELL:
             screen = None
+        elif _USE_CHROMEOS:
+            # Sommelier exposes no per-monitor geometry worth trusting for
+            # placement; one window, host-composited fullscreen.
+            screen = None
+            self._chromeos_log(n_monitors)
         else:
             screen = display.get_default_screen()
         bar_w = self.ui_cfg.get("bar_width", 560)
         bar_h = self.ui_cfg.get("bar_height", 6)
 
-        logger.info(
-            f"Detected {n_monitors} monitors on display "
-            f"(backend={'layer-shell' if _USE_LAYER_SHELL else 'x11-fullscreen'})"
-        )
+        if not _USE_CHROMEOS:
+            logger.info(
+                f"Detected {n_monitors} monitors on display "
+                f"(backend={'layer-shell' if _USE_LAYER_SHELL else 'x11-fullscreen'})"
+            )
 
-        for mon_idx in range(n_monitors):
+        for mon_idx in range(n_monitors if not _USE_CHROMEOS else 1):
             mon = display.get_monitor(mon_idx)
             geom = mon.get_geometry()
             desc = mon.get_model() or f"Monitor-{mon_idx}"
@@ -511,11 +567,22 @@ class XdgPauseOverlay:
                     win, GtkLayerShell.KeyboardMode.EXCLUSIVE
                 )
                 GtkLayerShell.set_namespace(win, "xdg-pause")
+            elif _USE_CHROMEOS:
+                # ChromeOS composites this one window. keep_above is advisory;
+                # fullscreen() covers the Sommelier surface; close is the host's
+                # escape hatch (delete-event returns False -> honors it).
+                win.set_keep_above(True)
+                win.fullscreen()
             else:
                 win.set_keep_above(True)
                 win.fullscreen_on_monitor(screen, mon_idx)
 
-            win.connect("delete-event", lambda w, e: True)
+            if _USE_CHROMEOS:
+                # Esc always exits; route it through early-exit friction instead of
+                # pretending to swallow it.
+                win.connect("delete-event", lambda w, e: False)
+            else:
+                win.connect("delete-event", lambda w, e: True)
             win.connect("key-press-event", self.on_key_press)
 
             box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
@@ -665,12 +732,24 @@ class XdgPauseOverlay:
             return
         self.finish_break(early=True, reason=reason)
 
+    def _early_exit_allowed(self, elapsed):
+        # Desktop backends enforce strict mode by swallowing keys. On ChromeOS
+        # the host always wins (Esc exits), so "strict" degrades to friction:
+        # any Esc/close routes through the reason prompt instead of sealing.
+        if _USE_CHROMEOS:
+            return True
+        return self.break_type == "long" and elapsed >= self.strict_interval
+
     def on_key_press(self, win, event):
         elapsed = time.time() - self.start_time
         logger.debug(
             f"Key press intercepted: keyval={event.keyval}, elapsed={elapsed:.1f}s"
         )
-        if self.break_type == "long" and elapsed >= self.strict_interval:
+        if _USE_CHROMEOS and event.keyval == Gdk.KEY_Escape:
+            logger.info("ChromeOS escape-hatch Esc: routing to early-exit friction")
+            self.request_early_exit()
+            return True
+        if self._early_exit_allowed(elapsed):
             if self.prompting_reason:
                 if event.keyval == Gdk.KEY_Escape:
                     self.cancel_early_exit_prompt()
@@ -952,33 +1031,103 @@ def dispatch_hook(
                     logger.warning(f"Hook script {script} failed: {e}")
 
 
+def _has_systemd_user():
+    """systemd --user only survives a session when linger is on; Crostini
+    containers routinely lack it, so prefer the file marker there."""
+    sysd = shutil.which("systemctl")
+    if not sysd:
+        return False
+    try:
+        res = subprocess.run(
+            ["systemctl", "--user", "is-system-running"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=3,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return False
+    if res.returncode != 0:
+        return False
+    if _USE_CHROMEOS and not os.environ.get("XDG_SESSION_ID"):
+        return False
+    return True
+
+
 SNOOZE_TIMER = os.environ.get("XDG_PAUSE_TIMER", "xdg-pause.timer")
 # Back-compat: lx01 shipped units as xdg-fixed-break.{service,timer};
 # keep honoring an explicit XDG_PAUSE_TIMER=xdg-fixed-break.timer.
 _LEGACY_TIMER = "xdg-fixed-break.timer"
 SNOOZE_RESUME_UNIT = "break-snooze-resume"
+# File marker: the boundary-aligned loop (crostini/) and the Crostini backend
+# honor this even when systemd --user is absent. Epoch seconds, or empty = off.
+SNOOZE_FILE = STATE_DIR / "snoozed-until"
+
+
+def _read_snooze_file():
+    try:
+        text = SNOOZE_FILE.read_text(encoding="utf-8").strip()
+    except OSError:
+        return None
+    if not text:
+        return None
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _write_snooze_file(until_epoch=None):
+    try:
+        if until_epoch is None:
+            SNOOZE_FILE.unlink(missing_ok=True)
+        else:
+            SNOOZE_FILE.write_text(str(int(until_epoch)), encoding="utf-8")
+        return True
+    except OSError as e:
+        logger.warning(f"Could not update snooze file {SNOOZE_FILE}: {e}")
+        return False
+
+
+def snoozed_remaining():
+    """Seconds left on a file-based snooze, or 0. Honored by the loop + main.
+
+    Missing/empty/garbage file = not snoozed. Any future epoch = snoozed.
+    """
+    until = _read_snooze_file()
+    if until is None:
+        return 0
+    return max(0, int(until - time.time()))
 
 
 def _snooze_cancel_resume():
-    subprocess.run(
-        ["systemctl", "--user", "stop", f"{SNOOZE_RESUME_UNIT}.timer"],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    subprocess.run(
-        [
-            "systemctl",
-            "--user",
-            "reset-failed",
-            f"{SNOOZE_RESUME_UNIT}.service",
-            f"{SNOOZE_RESUME_UNIT}.timer",
-        ],
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
+    if _has_systemd_user():
+        subprocess.run(
+            ["systemctl", "--user", "stop", f"{SNOOZE_RESUME_UNIT}.timer"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
+        subprocess.run(
+            [
+                "systemctl",
+                "--user",
+                "reset-failed",
+                f"{SNOOZE_RESUME_UNIT}.service",
+                f"{SNOOZE_RESUME_UNIT}.timer",
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+        )
 
 
 def _snooze_status():
+    remaining = snoozed_remaining()
+    if remaining > 0:
+        until = datetime.datetime.now() + datetime.timedelta(seconds=remaining)
+        print(f"break timer: snoozed (file marker, resumes {until:%H:%M})")
+        return
+    if not _has_systemd_user():
+        print("break timer: active (file-marker mode, no systemd --user)")
+        return
     res = subprocess.run(
         ["systemctl", "--user", "is-active", SNOOZE_TIMER],
         stdout=subprocess.PIPE,
@@ -1017,7 +1166,7 @@ def _kill_running_overlays():
 
 
 def handle_snooze(args_list):
-    """Pause or resume the xdg-pause systemd user timer."""
+    """Pause or resume the xdg-pause break timer (systemd --user, or file marker)."""
     usage_msg = "usage: xdg-pause snooze [start [MINUTES] | MINUTES | end | resume | on | status]"
     if not args_list:
         action = "start"
@@ -1036,7 +1185,9 @@ def handle_snooze(args_list):
             print(usage_msg, file=sys.stderr)
             return 2
         _snooze_cancel_resume()
-        subprocess.run(["systemctl", "--user", "start", SNOOZE_TIMER], check=True)
+        _write_snooze_file(None)
+        if _has_systemd_user():
+            subprocess.run(["systemctl", "--user", "start", SNOOZE_TIMER], check=True)
         dispatch_hook("snooze_end", mode="snooze")
         _snooze_status()
         return 0
@@ -1055,29 +1206,37 @@ def handle_snooze(args_list):
 
     if action == "start":
         _snooze_cancel_resume()
-        subprocess.run(["systemctl", "--user", "stop", SNOOZE_TIMER], check=True)
+        if _has_systemd_user():
+            subprocess.run(["systemctl", "--user", "stop", SNOOZE_TIMER], check=True)
         _kill_running_overlays()
         if mins:
-            subprocess.run(
-                [
-                    "systemd-run",
-                    "--user",
-                    "--quiet",
-                    f"--unit={SNOOZE_RESUME_UNIT}",
-                    f"--on-active={mins}m",
-                    "--description=Resume xdg-pause breaks after snooze",
-                    "systemctl",
-                    "--user",
-                    "start",
-                    SNOOZE_TIMER,
-                ],
-                check=True,
+            until_dt = datetime.datetime.now() + datetime.timedelta(
+                minutes=int(mins)
             )
-            until = (
-                datetime.datetime.now() + datetime.timedelta(minutes=int(mins))
-            ).strftime("%H:%M")
-            print(f"Breaks snoozed for {mins} min (until {until}).")
+            # File marker first: the scheduler loop and main() honor it even
+            # when systemd --user (or its transient resume unit) is unavailable.
+            _write_snooze_file(until_dt.timestamp())
+            if _has_systemd_user():
+                subprocess.run(
+                    [
+                        "systemd-run",
+                        "--user",
+                        "--quiet",
+                        f"--unit={SNOOZE_RESUME_UNIT}",
+                        f"--on-active={mins}m",
+                        "--description=Resume xdg-pause breaks after snooze",
+                        "systemctl",
+                        "--user",
+                        "start",
+                        SNOOZE_TIMER,
+                    ],
+                    check=True,
+                )
+            print(f"Breaks snoozed for {mins} min (until {until_dt:%H:%M}).")
         else:
+            # Indefinite: far-future epoch means "until end"; the loop and main()
+            # treat any future timestamp as snoozed. Cleared by `snooze end`.
+            _write_snooze_file(time.time() + 10 * 365 * 24 * 3600)
             print("Breaks snoozed until 'xdg-pause snooze end'.")
         dispatch_hook(
             "snooze_start",
@@ -1161,6 +1320,10 @@ def main():
         logger.info("SKIP break-in-progress (active marker PID alive)")
         sys.exit(0)
 
+    remaining = snoozed_remaining()
+    if remaining > 0:
+        logger.info(f"SKIP snoozed ({remaining}s left on file marker)")
+        sys.exit(0)
     Gtk.init_check()
     XdgPauseOverlay(
         break_type=b_type,
